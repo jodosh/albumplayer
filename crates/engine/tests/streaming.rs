@@ -142,7 +142,7 @@ fn an_album_streams_from_the_server_and_changes_track_by_itself() {
 
     player.next_track().unwrap();
     let second = collect_until(&events, Duration::from_secs(45), |e| {
-        started_tracks(e).len() >= 1
+        !started_tracks(e).is_empty()
     });
     let after = started_tracks(&second);
     assert!(
