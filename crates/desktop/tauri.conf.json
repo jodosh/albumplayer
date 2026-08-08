@@ -25,11 +25,28 @@
   "bundle": {
     "active": true,
     "targets": [
-      "deb",
-      "appimage"
+      "deb"
     ],
     "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
       "icons/icon.png"
-    ]
+    ],
+    "category": "Music",
+    "shortDescription": "Album-first music player",
+    "longDescription": "Plays whole albums rather than single tracks. Streams from an AlbumPlayer server and decodes locally for gapless playback.",
+    "publisher": "jodosh",
+    "homepage": "https://github.com/jodosh/albumplayer",
+    "linux": {
+      "deb": {
+        "depends": [
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-libav",
+          "gstreamer1.0-pulseaudio"
+        ]
+      }
+    }
   }
 }

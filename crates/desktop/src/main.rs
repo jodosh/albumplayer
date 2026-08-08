@@ -190,7 +190,40 @@ fn native_playback_available() -> bool {
     true
 }
 
+/// Environment variable that disables WebKit's DMABUF renderer.
+const DMABUF_ENV: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+/// Escape hatch for anyone whose drivers are fine and wants the faster path.
+const KEEP_DMABUF_ENV: &str = "ALBUMPLAYER_ENABLE_DMABUF";
+
+/// Work around WebKitGTK failing to allocate its render buffers.
+///
+/// On a good many Linux systems — including the one this was developed on —
+/// WebKitGTK cannot create GBM buffers and the window comes up blank, logging
+/// only `Failed to create GBM buffer`. Disabling the DMABUF renderer fixes it
+/// at a small cost in compositing performance, which for a mostly-static
+/// interface is a trade worth making by default: an installed application
+/// should not require the user to know an environment variable to see anything.
+///
+/// Anything already set by the user is left alone, and
+/// `ALBUMPLAYER_ENABLE_DMABUF=1` opts back into the faster path.
+fn apply_webkit_workaround() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    if std::env::var_os(DMABUF_ENV).is_some() {
+        return; // the user has an opinion; respect it
+    }
+    if std::env::var(KEEP_DMABUF_ENV).is_ok_and(|v| v == "1" || v == "true") {
+        return;
+    }
+    // SAFETY: called at the very top of main, before any thread exists, which
+    // is the only point at which setting the environment is sound.
+    unsafe { std::env::set_var(DMABUF_ENV, "1") };
+}
+
 fn main() {
+    apply_webkit_workaround();
+
     tauri::Builder::default()
         .setup(|app| {
             // A machine with no working audio output should still show the

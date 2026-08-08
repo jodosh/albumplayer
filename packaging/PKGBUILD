@@ -1,0 +1,45 @@
+# Maintainer: jodosh <jodosh@users.noreply.github.com>
+pkgname=albumplayer-desktop
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Album-first music player: plays whole records, with gapless playback"
+arch=('x86_64')
+url="https://github.com/jodosh/albumplayer"
+license=('MIT OR Apache-2.0')
+
+# webkit2gtk-4.1 renders the interface; the gst-plugins provide the decoders.
+# gst-libav covers AAC and the odder formats a real library accumulates.
+depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gstreamer')
+makedepends=('rust' 'cargo' 'nodejs' 'npm' 'pkgconf')
+source=("git+https://github.com/jodosh/albumplayer.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "albumplayer/ui"
+  npm ci --ignore-scripts
+}
+
+build() {
+  cd "albumplayer"
+  # The shell embeds the built interface, so the UI has to exist first.
+  npm --prefix ui run build
+  cargo build --release --locked -p albumplayer-desktop
+}
+
+package() {
+  cd "albumplayer"
+  install -Dm755 "target/release/albumplayer-desktop" \
+    "$pkgdir/usr/bin/albumplayer-desktop"
+  install -Dm644 "packaging/albumplayer-desktop.desktop" \
+    "$pkgdir/usr/share/applications/albumplayer-desktop.desktop"
+
+  for size in 32 128 256 512; do
+    install -Dm644 "crates/desktop/icons/${size}x${size}.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/albumplayer-desktop.png"
+  done
+  install -Dm644 "crates/desktop/icons/icon.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/albumplayer-desktop.svg"
+
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

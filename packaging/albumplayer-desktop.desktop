@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AlbumPlayer
+GenericName=Music Player
+Comment=Play whole albums from your own server
+Exec=albumplayer-desktop
+Icon=albumplayer-desktop
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+Keywords=music;album;player;gapless;
+StartupWMClass=albumplayer-desktop

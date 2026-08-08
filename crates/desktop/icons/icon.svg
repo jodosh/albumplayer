@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- A record half-out of its sleeve: the album, not the track.
+       Shapes are kept few and high-contrast so the mark still reads at 32px,
+       where fine grooves would alias into mud. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#20272e"/>
+      <stop offset="1" stop-color="#12171c"/>
+    </linearGradient>
+    <linearGradient id="disc" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#5b666f"/>
+      <stop offset="1" stop-color="#333c44"/>
+    </linearGradient>
+    <linearGradient id="sleeve" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e8eaed"/>
+      <stop offset="1" stop-color="#b9c1c8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <g transform="translate(312 256)">
+    <circle r="156" fill="url(#disc)"/>
+    <!-- Two grooves only; more disappears when scaled down. -->
+    <circle r="126" fill="none" stroke="#141a1f" stroke-opacity="0.55" stroke-width="6"/>
+    <circle r="100" fill="none" stroke="#141a1f" stroke-opacity="0.45" stroke-width="6"/>
+    <circle r="74" fill="#5ec8f2"/>
+    <circle r="16" fill="#12171c"/>
+  </g>
+
+  <!-- Light sleeve in front, so the dark disc reads against it either way. -->
+  <path d="M72 104 h180 a20 20 0 0 1 20 20 v264 a20 20 0 0 1 -20 20 H72 a20 20 0 0 1 -20 -20 V124 a20 20 0 0 1 20 -20 z"
+        fill="url(#sleeve)"/>
+  <g stroke="#5ec8f2" stroke-linecap="round" stroke-width="20">
+    <path d="M104 180 h116"/>
+    <path d="M104 232 h72" stroke-opacity="0.55"/>
+  </g>
+</svg>
