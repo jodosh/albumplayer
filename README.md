@@ -215,6 +215,32 @@ allowed on purpose: authentication is a bearer token a browser never attaches by
 itself, no cookies are involved, and credentials are explicitly disallowed,
 which is what makes a wildcard origin safe here rather than reckless.
 
+### Installing it
+
+On Arch:
+
+```sh
+cd packaging && makepkg -si
+```
+
+That clones the tagged release, builds the UI and the shell, and installs the
+binary, icons and desktop entry. It appears in the launcher as **AlbumPlayer**.
+
+On Debian or Ubuntu, build a `.deb`:
+
+```sh
+cd ui && npm install && npm run build
+cargo install tauri-cli --version "^2" --locked
+cd crates/desktop && cargo tauri bundle
+sudo dpkg -i ../../target/release/bundle/deb/AlbumPlayer_*_amd64.deb
+```
+
+The packages depend on the GStreamer plugin sets explicitly. GStreamer loads
+its decoders at runtime, so a package that omits them installs perfectly well
+and then cannot play a note.
+
+### Building it by hand
+
 The shell embeds the built UI, so the UI has to exist first. It is therefore
 left out of the workspace's default members: a fresh clone can run `cargo build`
 and `cargo test` without Node installed, and the shell is built explicitly.
@@ -224,11 +250,12 @@ cd ui && npm install && npm run build
 cargo build --release -p albumplayer-desktop
 ```
 
-On some Linux systems WebKitGTK fails to allocate its render buffers
-(`Failed to create GBM buffer`). Launching with
-`WEBKIT_DISABLE_DMABUF_RENDERER=1` works around it; it is left unset by default
-rather than forced on everyone, since it costs performance where the driver is
-fine.
+WebKitGTK fails to allocate its render buffers on a good many Linux systems and
+the window comes up blank, logging only `Failed to create GBM buffer`. The app
+disables that renderer itself, since an installed application should not require
+knowing an environment variable to show anything. An explicit
+`WEBKIT_DISABLE_DMABUF_RENDERER` is respected, and `ALBUMPLAYER_ENABLE_DMABUF=1`
+opts back into the faster path where the drivers are fine.
 
 ### Plays are events, never counters
 
