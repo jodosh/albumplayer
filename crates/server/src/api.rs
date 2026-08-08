@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use axum::extract::{Path as UrlPath, Query, Request, State};
+use axum::extract::{ConnectInfo, Path as UrlPath, Query, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -117,12 +117,16 @@ struct LoginResponse {
 
 async fn login(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
+    let client = client_address(&state, &headers, peer);
+
     // Argon2 verification is intentionally slow, so it must not run on an async
     // worker thread.
     let auth = std::sync::Arc::clone(&state.auth);
-    let token = tokio::task::spawn_blocking(move || auth.login(&body.password))
+    let token = tokio::task::spawn_blocking(move || auth.login(client, &body.password))
         .await
         .map_err(|_| Error::Internal)??;
 
@@ -137,6 +141,39 @@ async fn logout(State(state): State<AppState>, request: Request) -> Result<Json<
         state.auth.logout(&token);
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Which address a login attempt is counted against.
+///
+/// The socket address by default. Behind a tunnel every request arrives from
+/// the same upstream, so the real client has to come from a header instead —
+/// but only when the operator has said a proxy is genuinely in front, since
+/// otherwise anyone could forge the header and get a fresh allowance per guess.
+fn client_address(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    peer: std::net::SocketAddr,
+) -> std::net::IpAddr {
+    if !state.config.trust_proxy {
+        return peer.ip();
+    }
+
+    let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+
+    if let Some(ip) = header("cf-connecting-ip").and_then(|v| v.trim().parse().ok()) {
+        return ip;
+    }
+    // With one trusted hop the last entry is what that hop observed; earlier
+    // entries are whatever the caller chose to claim.
+    if let Some(forwarded) = header("x-forwarded-for")
+        && let Some(ip) = forwarded
+            .rsplit(',')
+            .next()
+            .and_then(|v| v.trim().parse().ok())
+    {
+        return ip;
+    }
+    peer.ip()
 }
 
 async fn api_not_found() -> Error {
@@ -532,6 +569,7 @@ mod tests {
             scan_on_start: false,
             session_ttl: std::time::Duration::from_secs(60),
             ui_dir: None,
+            trust_proxy: false,
         };
         let auth = crate::auth::Auth::new(&config.password, config.session_ttl).unwrap();
         routes(AppState {
@@ -670,6 +708,88 @@ mod tests {
         assert_eq!(token_from(&request_with(Some("Basic abc"), "/api/x")), None);
         // A different query parameter is not a token either.
         assert_eq!(token_from(&request_with(None, "/api/x?other=1")), None);
+    }
+
+    fn state_with(trust_proxy: bool) -> AppState {
+        let library = albumplayer_core::Library::open_in_memory().unwrap();
+        let config = crate::Config {
+            music_root: std::env::temp_dir(),
+            data_dir: std::env::temp_dir(),
+            bind: "127.0.0.1:0".parse().unwrap(),
+            password: "test-password".into(),
+            scan_on_start: false,
+            session_ttl: std::time::Duration::from_secs(60),
+            ui_dir: None,
+            trust_proxy,
+        };
+        let auth = crate::auth::Auth::new(&config.password, config.session_ttl).unwrap();
+        AppState {
+            library: std::sync::Arc::new(std::sync::Mutex::new(library)),
+            auth: std::sync::Arc::new(auth),
+            config: std::sync::Arc::new(config),
+        }
+    }
+
+    fn headers_with(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        for (k, v) in pairs {
+            headers.insert(
+                axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn forwarded_headers_are_ignored_unless_a_proxy_is_trusted() {
+        // Otherwise an attacker invents a new address per guess and the login
+        // lockout never engages.
+        let peer: std::net::SocketAddr = "203.0.113.7:5555".parse().unwrap();
+        let spoofed = headers_with(&[
+            ("x-forwarded-for", "1.2.3.4"),
+            ("cf-connecting-ip", "5.6.7.8"),
+        ]);
+        assert_eq!(
+            client_address(&state_with(false), &spoofed, peer),
+            peer.ip(),
+            "the socket address must win when no proxy is trusted"
+        );
+    }
+
+    #[test]
+    fn a_trusted_proxy_supplies_the_real_client() {
+        // Behind a tunnel every request shares one peer address, so without
+        // this one attacker would lock out the whole household.
+        let peer: std::net::SocketAddr = "127.0.0.1:5555".parse().unwrap();
+        let state = state_with(true);
+
+        let cf = headers_with(&[("cf-connecting-ip", "5.6.7.8")]);
+        assert_eq!(
+            client_address(&state, &cf, peer).to_string(),
+            "5.6.7.8"
+        );
+
+        // With one hop, the last entry is what that hop actually saw; earlier
+        // ones are whatever the caller claimed.
+        let xff = headers_with(&[("x-forwarded-for", "1.1.1.1, 9.9.9.9")]);
+        assert_eq!(
+            client_address(&state, &xff, peer).to_string(),
+            "9.9.9.9"
+        );
+    }
+
+    #[test]
+    fn a_trusted_proxy_falls_back_to_the_socket_when_headers_are_absent() {
+        let peer: std::net::SocketAddr = "203.0.113.7:5555".parse().unwrap();
+        let state = state_with(true);
+        assert_eq!(
+            client_address(&state, &headers_with(&[]), peer),
+            peer.ip()
+        );
+        // Garbage in the header must not be taken as an address either.
+        let junk = headers_with(&[("x-forwarded-for", "not-an-ip")]);
+        assert_eq!(client_address(&state, &junk, peer), peer.ip());
     }
 
     #[test]

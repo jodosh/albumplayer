@@ -76,8 +76,13 @@ async fn main() -> Result<()> {
         .with_context(|| format!("binding {}", config.bind))?;
     tracing::info!(address = %config.bind, "listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+    // `into_make_service_with_connect_info` is what makes the peer address
+    // available to handlers; the login limiter counts failures against it.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serving")?;
 

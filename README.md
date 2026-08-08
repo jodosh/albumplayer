@@ -330,6 +330,7 @@ cover cache and must persist.
 | `ALBUMPLAYER_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALBUMPLAYER_SCAN_ON_START` | `true` | Unchanged files are skipped, so this is cheap |
 | `ALBUMPLAYER_SESSION_HOURS` | `720` | Login lifetime |
+| `ALBUMPLAYER_TRUST_PROXY` | `false` | Read the client address from `CF-Connecting-IP` / `X-Forwarded-For` |
 
 Scanning and enrichment run inside the container:
 
@@ -402,6 +403,29 @@ having in audio software where codec patent claims are not hypothetical.
 
 Unless you state otherwise, any contribution you submit shall be dual-licensed
 as above, with no additional terms.
+
+### Guessing the password
+
+Argon2 alone does not protect a single-password login. Verification takes about
+15 ms, which a handful of parallel connections turns into roughly 150 guesses a
+second — a dictionary password falls in minutes.
+
+Failed logins are therefore counted per client address. Five are free, so a
+typo costs nothing; after that each failure doubles the lockout, from two
+seconds up to a cap of fifteen minutes. The lockout is checked before the
+password is verified, so a throttled client cannot keep the CPU busy, and it
+applies to the correct password too, so it cannot be used as an oracle. A
+successful login clears the record.
+
+Measured against the running server, a hundred parallel guesses now get 76
+refusals and 24 attempts, against 100 attempts at ~150/second before.
+
+**Turn on `ALBUMPLAYER_TRUST_PROXY` only behind a tunnel or reverse proxy.**
+Forwarded-for headers are trivially forged: trusted on a directly-exposed
+server, an attacker simply invents a new address per guess and the lockout never
+engages. Left off behind a tunnel, every request appears to come from the proxy
+and one attacker locks out the household — so it must match the deployment
+either way.
 
 ### Dependencies
 

@@ -20,6 +20,8 @@ const SCAN_ON_START: &str = "ALBUMPLAYER_SCAN_ON_START";
 const SESSION_HOURS: &str = "ALBUMPLAYER_SESSION_HOURS";
 /// Directory holding the built web UI.
 const UI_DIR: &str = "ALBUMPLAYER_UI_DIR";
+/// Whether to believe forwarded-for headers when identifying a client.
+const TRUST_PROXY: &str = "ALBUMPLAYER_TRUST_PROXY";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -31,6 +33,15 @@ pub struct Config {
     pub session_ttl: std::time::Duration,
     /// Built web UI to serve, if present. Absent means API only.
     pub ui_dir: Option<PathBuf>,
+    /// Take the client address from `CF-Connecting-IP` or `X-Forwarded-For`.
+    ///
+    /// Off by default, and deliberately so. Those headers are trivially forged,
+    /// so trusting them on a directly-exposed server would let an attacker
+    /// dodge the login lockout by inventing a new address per attempt. Turn it
+    /// on only when something you control — a tunnel or reverse proxy — is the
+    /// sole way in, or every request will appear to come from the proxy and one
+    /// attacker will lock out everybody.
+    pub trust_proxy: bool,
 }
 
 impl Config {
@@ -76,6 +87,7 @@ impl Config {
             scan_on_start: truthy(&env_or(SCAN_ON_START, "true")),
             session_ttl: std::time::Duration::from_secs(hours * 3600),
             ui_dir,
+            trust_proxy: truthy(&env_or(TRUST_PROXY, "false")),
         })
     }
 
@@ -134,6 +146,7 @@ mod tests {
             scan_on_start: true,
             session_ttl: std::time::Duration::from_secs(60),
             ui_dir: None,
+            trust_proxy: false,
         };
         assert_eq!(config.database_path(), PathBuf::from("/data/library.db"));
         assert_eq!(config.art_cache_dir(), PathBuf::from("/data/art"));

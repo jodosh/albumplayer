@@ -26,6 +26,9 @@ pub enum Error {
     #[error("authentication required")]
     Unauthorized,
 
+    #[error("too many failed attempts; try again in {} seconds", retry_after.as_secs().max(1))]
+    TooManyAttempts { retry_after: std::time::Duration },
+
     #[error("not found")]
     NotFound,
 
@@ -49,6 +52,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        // A lockout answers with Retry-After so a well-behaved client waits the
+        // right amount rather than hammering.
+        if let Error::TooManyAttempts { retry_after } = &self {
+            let seconds = retry_after.as_secs().max(1);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, seconds.to_string())],
+                axum::Json(serde_json::json!({ "error": self.to_string() })),
+            )
+                .into_response();
+        }
+
         let (status, message) = match &self {
             Error::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             Error::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
