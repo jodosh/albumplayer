@@ -18,7 +18,8 @@ gapless album playback, all driven from a CLI. The desktop UI is not built yet.
 | 3a | `albumplayer-server`: HTTP API, auth, streaming, Docker image | done |
 | 3b | Svelte web UI, served by the server | done |
 | 3c | Tauri v2 desktop shell with gapless GStreamer playback | done |
-| 4 | Exposure: TLS and remote access | not started |
+| 4 | Android app: Kotlin, Compose and Media3 | browse and play |
+| 5 | Exposure: TLS and remote access | not started |
 
 ## Try it
 
@@ -257,6 +258,32 @@ knowing an environment variable to show anything. An explicit
 `WEBKIT_DISABLE_DMABUF_RENDERER` is respected, and `ALBUMPLAYER_ENABLE_DMABUF=1`
 opts back into the faster path where the drivers are fine.
 
+### The Android app
+
+Kotlin, Compose and `androidx.media3`. Deliberately *not* the Svelte interface
+in a wrapper: on a phone the dominant requirements are background playback,
+lock-screen and Bluetooth controls, and battery, and a webview loses at all
+three. Media3 provides them, along with gapless playback and Android Auto.
+
+The album-first rules survive the port, and one of them takes explicit work:
+**ExoPlayer's own shuffle reorders tracks**, which is exactly what this player
+exists to avoid. It stays switched off, and shuffling instead permutes whole
+albums before flattening them into the playlist, so each record still plays
+start to finish. Next-track and next-album remain separate controls, with
+album boundaries carried in each queue entry's extras.
+
+The phone is a client like any other: the server owns the library and the play
+history, so a record heard on the sofa shows up in the desktop app's counts.
+
+```sh
+cd android && ./gradlew :app:assembleDebug
+```
+
+It needs a JDK 17-21 (the Android Gradle Plugin does not accept newer ones) and
+an Android SDK. Cleartext HTTP is permitted because a homelab server is
+typically plain HTTP on a private address; once it is exposed it should be
+behind TLS and this permission is never exercised.
+
 ### Plays are events, never counters
 
 `play_event` and `album_session` are append-only. Every "how many times"
@@ -324,6 +351,7 @@ albumplayer-engine   album queue model + gapless GStreamer playback
 albumplayer-cli      scan/inspect/audit/enrich/play commands
 albumplayer-desktop  Tauri v2 shell: same UI, audio through GStreamer
 ui/                  Svelte 5 web UI, served by the server and by the shell
+android/             Kotlin app: Compose interface, Media3 playback
 ```
 
 **One server, many clients.** The server owns the library, the database and the

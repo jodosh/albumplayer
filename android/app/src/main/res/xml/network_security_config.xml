@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The server address is configured by the user at runtime, so it cannot be
+     enumerated here: Android matches hostnames, not address ranges, and a
+     homelab instance is typically plain HTTP on a private address.
+
+     Cleartext is therefore permitted in general. That is the honest trade for a
+     self-hosted client — the alternative is an app that simply cannot reach a
+     LAN server. Once the server is exposed beyond the house it should be behind
+     TLS, and then this permission is never exercised. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
