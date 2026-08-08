@@ -8,6 +8,17 @@ members = [
     "crates/cli",
     "crates/desktop",
 ]
+# The desktop shell embeds the built web UI, so it cannot compile until
+# `ui/dist` exists. Leaving it out of the default set means a fresh clone can
+# run `cargo build` and `cargo test` straight away; build the shell explicitly
+# with `-p albumplayer-desktop` once the UI is built.
+default-members = [
+    "crates/core",
+    "crates/engine",
+    "crates/enrich",
+    "crates/server",
+    "crates/cli",
+]
 
 [workspace.package]
 version = "0.1.0"

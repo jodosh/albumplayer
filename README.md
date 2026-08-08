@@ -215,8 +215,12 @@ allowed on purpose: authentication is a bearer token a browser never attaches by
 itself, no cookies are involved, and credentials are explicitly disallowed,
 which is what makes a wildcard origin safe here rather than reckless.
 
+The shell embeds the built UI, so the UI has to exist first. It is therefore
+left out of the workspace's default members: a fresh clone can run `cargo build`
+and `cargo test` without Node installed, and the shell is built explicitly.
+
 ```sh
-cd ui && npm run build          # the shell embeds ui/dist
+cd ui && npm install && npm run build
 cargo build --release -p albumplayer-desktop
 ```
 
