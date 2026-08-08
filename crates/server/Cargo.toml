@@ -1,0 +1,31 @@
+[package]
+name = "albumplayer-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "albumplayer-server"
+path = "src/main.rs"
+
+[dependencies]
+albumplayer-core.workspace = true
+albumplayer-enrich.workspace = true
+anyhow.workspace = true
+argon2 = "0.5.3"
+axum = "0.8.9"
+getrandom = "0.4.3"
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+subtle = "2.6.1"
+thiserror.workspace = true
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = { version = "0.7.19", features = ["io"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.0", features = ["fs", "cors", "trace", "limit"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"] }

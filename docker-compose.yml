@@ -1,0 +1,38 @@
+# Deploy through Portainer as a stack, or `docker compose up -d`.
+#
+# Two volumes matter:
+#   /music  your library, mounted read-only — the server never writes to it
+#   /data   the database and the cover cache, which must persist
+services:
+  albumplayer:
+    build: .
+    # Or, once you publish it:
+    # image: ghcr.io/YOURNAME/albumplayer:latest
+    container_name: albumplayer
+    restart: unless-stopped
+
+    environment:
+      # Required. The server refuses to start without one.
+      ALBUMPLAYER_PASSWORD: ${ALBUMPLAYER_PASSWORD:?set this in a .env file}
+      # Scan on every start. Unchanged files are skipped, so this is cheap.
+      ALBUMPLAYER_SCAN_ON_START: "true"
+      # How long a login lasts, in hours.
+      ALBUMPLAYER_SESSION_HOURS: "720"
+      RUST_LOG: "albumplayer_server=info"
+
+    volumes:
+      - type: bind
+        source: ${MUSIC_PATH:?path to your music}
+        target: /music
+        read_only: true
+      - albumplayer-data:/data
+
+    ports:
+      - "8080:8080"
+
+    # Nothing here needs to write outside its own volume.
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  albumplayer-data:

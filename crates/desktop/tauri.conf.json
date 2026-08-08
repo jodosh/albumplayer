@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AlbumPlayer",
+  "version": "0.1.0",
+  "identifier": "lan.albumplayer.desktop",
+  "build": {
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AlbumPlayer",
+        "width": 1180,
+        "height": 820,
+        "minWidth": 480,
+        "minHeight": 420,
+        "backgroundColor": "#0e1114"
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "albumplayer-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.13.3",
+    "playwright": "^1.62.1",
+    "svelte": "^5.56.8",
+    "svelte-check": "^4.7.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  },
+  "license": "MIT OR Apache-2.0",
+  "description": "Web UI for AlbumPlayer, an album-first music player"
+}

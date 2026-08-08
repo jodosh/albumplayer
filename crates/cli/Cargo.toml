@@ -1,0 +1,23 @@
+[package]
+name = "albumplayer-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "albumplayer"
+path = "src/main.rs"
+
+[dependencies]
+albumplayer-core.workspace = true
+albumplayer-engine = { workspace = true, optional = true }
+albumplayer-enrich.workspace = true
+anyhow.workspace = true
+clap = { version = "4.6.6", features = ["derive"] }
+libc = "0.2.189"
+
+[features]
+default = ["playback"]
+# Local audio playback via GStreamer. Off for the container image, which has no
+# sound card and no reason to carry the GStreamer libraries.
+playback = ["dep:albumplayer-engine"]

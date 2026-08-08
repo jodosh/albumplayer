@@ -1,0 +1,32 @@
+/* One dark palette: this is a listening app, usually open in the evening. */
+:root {
+  --bg: #0e1114;
+  --raised: #191d22;
+  --bar: #14181cd9;
+  --fg: #e8eaed;
+  --dim: #8b949e;
+  --line: #262c33;
+  --accent: #5ec8f2;
+  --warn: #d9a441;
+  --danger: #e5736a;
+
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+}

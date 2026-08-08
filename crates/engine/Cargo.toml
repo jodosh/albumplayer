@@ -1,0 +1,13 @@
+[package]
+name = "albumplayer-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+albumplayer-core.workspace = true
+gstreamer = "0.25.3"
+thiserror.workspace = true
+
+[dev-dependencies]
+rusqlite = "0.40.1"
