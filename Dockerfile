@@ -52,6 +52,14 @@ ENV ALBUMPLAYER_MUSIC_ROOT=/music \
 
 # Runs unprivileged. The music volume only ever needs to be readable.
 RUN useradd --system --uid 10001 --create-home albumplayer
+
+# Create the data directory *and give it to that user* before dropping
+# privileges. Docker seeds a fresh named volume from the image's directory,
+# ownership included, so without this the volume arrives owned by root and the
+# server cannot create its database. (Rootless Podman remaps UIDs and hides the
+# problem, which is why this has to be explicit rather than discovered.)
+RUN mkdir -p /data /data/art && chown -R 10001:10001 /data
+
 USER 10001:10001
 
 VOLUME ["/data"]

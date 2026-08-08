@@ -30,6 +30,8 @@ async fn main() -> Result<()> {
         );
     }
 
+    ensure_writable(&config.data_dir)?;
+
     let mut library =
         Library::open(&config.database_path()).context("opening the library database")?;
     library
@@ -87,6 +89,31 @@ async fn main() -> Result<()> {
         .context("serving")?;
 
     Ok(())
+}
+
+/// Check the data directory can actually be written to.
+///
+/// SQLite reports a read-only directory as "unable to open database file",
+/// which says nothing about the cause. In a container the cause is almost
+/// always a volume owned by root while the server runs unprivileged, so name
+/// that possibility and the command that fixes it.
+fn ensure_writable(dir: &std::path::Path) -> Result<()> {
+    let probe = dir.join(".write-test");
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(e) => {
+            let uid = unsafe { libc::getuid() };
+            anyhow::bail!(
+                "cannot write to {} (running as uid {uid}): {e}\n\
+                 If this is a container, the volume is probably owned by root. Fix it with:\n\
+                 \x20 docker run --rm -u 0 -v <volume>:/data alpine chown -R {uid}:{uid} /data",
+                dir.display()
+            )
+        }
+    }
 }
 
 /// Stop cleanly on Ctrl-C or on the SIGTERM that Docker sends.

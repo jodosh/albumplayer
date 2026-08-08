@@ -340,6 +340,21 @@ docker exec albumplayer albumplayer --db /data/library.db replaygain
 docker exec albumplayer albumplayer --db /data/library.db artwork
 ```
 
+### If the server cannot open its database
+
+`unable to open database file` (SQLite error 14) means the `/data` volume is not
+writable by the unprivileged user the server runs as. The image creates `/data`
+owned by uid 10001 so a fresh volume inherits that, but a volume created before
+this was fixed — or one seeded by hand — will still be owned by root:
+
+```sh
+docker run --rm -u 0 -v albumplayer-data:/data alpine chown -R 10001:10001 /data
+docker restart albumplayer
+```
+
+Portainer prefixes stack volumes with the stack name, so the volume is likely
+`<stack>_albumplayer-data`; `docker volume ls` will show it.
+
 ### Moving an existing library into the container
 
 `docker cp` writes as root, so ownership has to be corrected afterwards or the
