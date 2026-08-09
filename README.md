@@ -19,6 +19,7 @@ gapless album playback, all driven from a CLI. The desktop UI is not built yet.
 | 3b | Svelte web UI, served by the server | done |
 | 3c | Tauri v2 desktop shell with gapless GStreamer playback | done |
 | 4 | Android app: Kotlin, Compose and Media3 | browse and play |
+| 4b | Android Auto: one button, no browsing | done |
 | 5 | Exposure: TLS and remote access | not started |
 
 ## Try it
@@ -283,6 +284,37 @@ It needs a JDK 17-21 (the Android Gradle Plugin does not accept newer ones) and
 an Android SDK. Cleartext HTTP is permitted because a homelab server is
 typically plain HTTP on a private address; once it is exposed it should be
 behind TLS and this permission is never exercised.
+
+### Android Auto
+
+The car gets one thing to press — *Play a random album* — plus skip-track and
+skip-album. There is deliberately no way to choose a record from the car.
+
+That is a safety decision rather than a limitation of the platform. Picking an
+album from a library of several hundred means reading a list at speed, and the
+interesting decision — what to listen to — belongs at a standstill. Skipping is
+enough to escape a record that turns out to be wrong for the drive.
+
+Two consequences worth knowing:
+
+- The service is a `MediaLibraryService`, not merely a `MediaSessionService`,
+  because the car browses it directly and **the phone's Activity never runs
+  while driving**. Anything the car can reach has to be loadable from the
+  service itself, so it holds its own repository built from stored settings.
+- Skipping a whole album is a custom session command with its own button in the
+  car's layout; skipping a track is the standard transport control the car
+  draws for itself.
+
+Instrumented tests connect a `MediaBrowser` — exactly what Android Auto does —
+and assert the browse tree stays one entry deep. If a future change starts
+exposing the album list to the car, they fail.
+
+```sh
+cd android && ANDROID_SERIAL=<device> ./gradlew :app:connectedDebugAndroidTest
+```
+
+Sideloaded media apps only appear in Android Auto once its developer settings
+allow unknown sources.
 
 ### Plays are events, never counters
 

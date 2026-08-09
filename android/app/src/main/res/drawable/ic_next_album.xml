@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- Two chevrons and a bar: skip the whole record, not one track. -->
+    <path android:fillColor="@android:color/white"
+        android:pathData="M4,6.5L11,12L4,17.5Z" />
+    <path android:fillColor="@android:color/white"
+        android:pathData="M13,6.5L20,12L13,17.5Z" />
+    <path android:fillColor="@android:color/white"
+        android:pathData="M21,6h1.5v12h-1.5z" />
+</vector>

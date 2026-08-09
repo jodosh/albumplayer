@@ -29,14 +29,22 @@
             </intent-filter>
         </activity>
 
-        <!-- MediaSessionService is what gives lock-screen, notification,
-             Bluetooth and Android Auto controls. -->
+        <!-- Android Auto discovers media apps through this descriptor. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!-- A MediaLibraryService, not merely a MediaSessionService: the car
+             browses the service directly and the phone's Activity never runs,
+             so content has to be reachable from here. It also provides the
+             lock-screen, notification and Bluetooth controls on the phone. -->
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
     </application>

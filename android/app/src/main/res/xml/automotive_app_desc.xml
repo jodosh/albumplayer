@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declares this as a media app to Android Auto. Without it the app never
+     appears in the car's list of sources. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>
