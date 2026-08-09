@@ -1,0 +1,82 @@
+# AlbumPlayer reachable over Tailscale, without touching the host's networking.
+#
+# Deploy as a Portainer stack, or:
+#   docker compose -f docker-compose.tailscale.yml up -d
+#
+# Tailscale runs as a sidecar and the server shares its network namespace, so
+# the host's DNS, routing table and firewall rules are never modified. That
+# containment is the point: an existing Cloudflare tunnel on the same machine
+# carries on exactly as before, and backing this out is `compose down`.
+#
+# The trade: inside the namespace Tailscale advertises a Docker-internal
+# address, which a phone on your own wifi cannot reach, so at home the app is
+# relayed rather than direct. Away from home it is a direct connection as usual,
+# since NAT traversal uses the publicly-discovered endpoint. Port 8080 is still
+# published on the LAN for clients at home, which is the case that matters.
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: albumplayer-tailscale
+    # Becomes albumplayer.<your-tailnet>.ts.net under MagicDNS.
+    hostname: albumplayer
+    restart: unless-stopped
+
+    environment:
+      # Generate at https://login.tailscale.com/admin/settings/keys
+      # A reusable, non-ephemeral key survives container restarts.
+      TS_AUTHKEY: ${TS_AUTHKEY:?create an auth key in the Tailscale admin console}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Kernel networking rather than userspace: markedly faster for streaming.
+      TS_USERSPACE: "false"
+      # Publishes the server over HTTPS with a real certificate, tailnet-only.
+      TS_SERVE_CONFIG: /config/serve.json
+
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/serve.json:ro
+
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+
+    # Clients at home reach the server on the LAN through this mapping; the
+    # app container has no ports of its own, sharing this namespace.
+    ports:
+      - "8080:8080"
+
+  albumplayer:
+    build: .
+    # image: ghcr.io/jodosh/albumplayer:latest
+    container_name: albumplayer
+    restart: unless-stopped
+
+    # Shares the sidecar's network namespace, so binding 0.0.0.0:8080 here is
+    # what Tailscale serves and what the LAN mapping above exposes.
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+
+    environment:
+      ALBUMPLAYER_PASSWORD: ${ALBUMPLAYER_PASSWORD:?set this in a .env file}
+      ALBUMPLAYER_SCAN_ON_START: "true"
+      ALBUMPLAYER_SESSION_HOURS: "720"
+      RUST_LOG: "albumplayer_server=info"
+      # Leave proxy trust off. `tailscale serve` presents the real peer address,
+      # and trusting forwarded headers would let a forged one evade the login
+      # lockout.
+      ALBUMPLAYER_TRUST_PROXY: "false"
+
+    volumes:
+      - type: bind
+        source: ${MUSIC_PATH:?path to your music}
+        target: /music
+        read_only: true
+      - albumplayer-data:/data
+
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  albumplayer-data:
+  tailscale-state:

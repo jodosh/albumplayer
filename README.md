@@ -442,6 +442,50 @@ docker restart albumplayer
 Portainer prefixes stack volumes with the stack name, so the volume is likely
 `<stack>_albumplayer-data`; `docker volume ls` will show it.
 
+### Reaching it from outside the house
+
+`docker-compose.tailscale.yml` adds a [Tailscale](https://tailscale.com) sidecar,
+putting the server on a private WireGuard mesh with nothing exposed to the
+public internet.
+
+The sidecar runs Tailscale *inside a container's network namespace*, so the
+host's DNS, routing table and firewall rules are untouched. That matters on a
+machine already running something that works — a Cloudflare tunnel, say —
+because backing this out is `compose down` rather than unpicking changes to the
+host. A Tailscale install on the host is simpler, but it rewrites
+`/etc/resolv.conf` for MagicDNS, which is the usual way it surprises an existing
+setup (`--accept-dns=false` avoids that, at the cost of the names).
+
+```sh
+cp .env.example .env      # add TS_AUTHKEY alongside the password
+docker compose -f docker-compose.tailscale.yml up -d
+```
+
+The auth key comes from the Tailscale admin console; make it **reusable and not
+ephemeral** so the node survives a restart. With MagicDNS and HTTPS enabled on
+the tailnet, `tailscale serve` publishes the server at
+`https://albumplayer.<your-tailnet>.ts.net` with a real certificate — still
+reachable only from your own devices.
+
+Be careful of the neighbouring command: `tailscale funnel` publishes to the
+public internet. `serve` does not.
+
+**Which address to use where.** Tailscale prefers direct connections and only
+relays when it cannot make one. Inside a container namespace the address it
+advertises is Docker-internal, which a phone on your own wifi cannot reach, so
+*at home* a Tailscale client is relayed rather than direct. Port 8080 is still
+published on the LAN for that reason:
+
+| Client | Address | Path |
+|---|---|---|
+| Desktop at home | `http://<lan-ip>:8080` | straight over the LAN |
+| Phone away from home | `https://albumplayer.<tailnet>.ts.net` | direct, via NAT traversal |
+| Phone at home | either | the tailnet address is relayed; the LAN one is not |
+
+Leave `ALBUMPLAYER_TRUST_PROXY` off. `tailscale serve` presents the genuine peer
+address, and trusting forwarded headers would let a forged one evade the login
+lockout.
+
 ### Moving an existing library into the container
 
 `docker cp` writes as root, so ownership has to be corrected afterwards or the
