@@ -459,13 +459,22 @@ setup (`--accept-dns=false` avoids that, at the cost of the names).
 ```sh
 cp .env.example .env      # add TS_AUTHKEY alongside the password
 docker compose -f docker-compose.tailscale.yml up -d
+docker exec albumplayer-tailscale tailscale serve --bg 8080
 ```
+
+In Portainer, set the stack's **Compose path** to
+`docker-compose.tailscale.yml`; it defaults to `docker-compose.yml`. **Keep the
+stack name unchanged** when switching — Portainer prefixes volume names with it,
+and a new name means a new empty volume and a library that has to be scanned and
+enriched again.
 
 The auth key comes from the Tailscale admin console; make it **reusable and not
 ephemeral** so the node survives a restart. With MagicDNS and HTTPS enabled on
-the tailnet, `tailscale serve` publishes the server at
+the tailnet, that `serve` command publishes the server at
 `https://albumplayer.<your-tailnet>.ts.net` with a real certificate — still
-reachable only from your own devices.
+reachable only from your own devices. It is run once and persists in the state
+volume, rather than being a mounted config file that would tie the stack to a
+checkout of this repository.
 
 Be careful of the neighbouring command: `tailscale funnel` publishes to the
 public internet. `serve` does not.

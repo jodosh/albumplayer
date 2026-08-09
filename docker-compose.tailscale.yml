@@ -8,6 +8,15 @@
 # containment is the point: an existing Cloudflare tunnel on the same machine
 # carries on exactly as before, and backing this out is `compose down`.
 #
+# HTTPS is turned on once, after the stack first comes up:
+#
+#   docker exec albumplayer-tailscale tailscale serve --bg 8080
+#
+# That is deliberately not a mounted config file. A bind mount would tie this
+# stack to a checkout of the repository and break if it were pasted into
+# Portainer's web editor; the setting persists in the state volume anyway, so
+# it only has to be done once.
+#
 # The trade: inside the namespace Tailscale advertises a Docker-internal
 # address, which a phone on your own wifi cannot reach, so at home the app is
 # relayed rather than direct. Away from home it is a direct connection as usual,
@@ -28,12 +37,9 @@ services:
       TS_STATE_DIR: /var/lib/tailscale
       # Kernel networking rather than userspace: markedly faster for streaming.
       TS_USERSPACE: "false"
-      # Publishes the server over HTTPS with a real certificate, tailnet-only.
-      TS_SERVE_CONFIG: /config/serve.json
 
     volumes:
       - tailscale-state:/var/lib/tailscale
-      - ./tailscale-serve.json:/config/serve.json:ro
 
     devices:
       - /dev/net/tun:/dev/net/tun
