@@ -34,6 +34,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core)
+    implementation("androidx.collection:collection-ktx:1.4.5")
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

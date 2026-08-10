@@ -19,7 +19,20 @@ object AlbumQueue {
     /** Extras key marking which album a queue entry belongs to. */
     const val ALBUM_ID = "albumId"
 
-    fun mediaItems(album: AlbumDetail, repository: Repository): List<MediaItem> =
+    /**
+     * Build the queue entries for one album.
+     *
+     * `artwork` is the cover as bytes, when it has been fetched. Carrying it in
+     * the metadata is what makes art appear on the small Android Auto tiles,
+     * which are drawn by a different process that cannot always fetch the URI
+     * for itself. Passing null still leaves the URI, which the full-screen
+     * player resolves in-process.
+     */
+    fun mediaItems(
+        album: AlbumDetail,
+        repository: Repository,
+        artwork: ByteArray? = null,
+    ): List<MediaItem> =
         album.tracks.map { track ->
             val extras = android.os.Bundle().apply { putLong(ALBUM_ID, album.id) }
             MediaItem.Builder()
@@ -40,6 +53,14 @@ object AlbumQueue {
                                 null
                             }
                         )
+                        .also { builder ->
+                            if (artwork != null) {
+                                builder.setArtworkData(
+                                    artwork,
+                                    MediaMetadata.PICTURE_TYPE_FRONT_COVER,
+                                )
+                            }
+                        }
                         .setExtras(extras)
                         .build()
                 )
@@ -48,6 +69,24 @@ object AlbumQueue {
 
     fun flatten(albums: List<AlbumDetail>, repository: Repository): List<MediaItem> =
         albums.flatMap { mediaItems(it, repository) }
+
+    /**
+     * As [mediaItems], fetching the cover first so the car's tiles have one.
+     *
+     * Skipped for very long tracklists: the metadata crosses a Binder
+     * transaction with a size limit, and a cover repeated hundreds of times
+     * would exceed it and break playback altogether.
+     *
+     * Blocking: call from a background thread.
+     */
+    fun mediaItemsWithArtwork(album: AlbumDetail, repository: Repository): List<MediaItem> {
+        val artwork = if (album.hasCover && album.tracks.size <= Artwork.MAX_TRACKS_TO_EMBED) {
+            Artwork.thumbnail(repository, album.id)
+        } else {
+            null
+        }
+        return mediaItems(album, repository, artwork)
+    }
 
     /** Shuffle the albums, never the tracks inside them. */
     fun shuffledAlbums(albums: List<AlbumDetail>): List<AlbumDetail> = albums.shuffled()

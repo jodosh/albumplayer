@@ -305,6 +305,18 @@ Two consequences worth knowing:
   car's layout; skipping a track is the standard transport control the car
   draws for itself.
 
+Cover art travels as **bytes in the metadata**, not only as a URL. The
+full-screen car player resolves `artworkUri` inside this app's process and works
+either way, but the small tiles are drawn by the Android Auto process, which
+fetches that URL itself — a different process with its own network rules, and a
+plain-HTTP homelab address is the sort of thing it declines to load. Carrying
+the image removes the question.
+
+It is downscaled to a thumbnail first, and skipped for tracklists longer than
+fifty. Metadata crosses a Binder transaction capped at roughly a megabyte, and a
+full-size cover repeated across a long album would exceed it and break playback
+altogether — a worse fault than a missing thumbnail.
+
 Instrumented tests connect a `MediaBrowser` — exactly what Android Auto does —
 and assert the browse tree stays one entry deep. If a future change starts
 exposing the album list to the car, they fail.

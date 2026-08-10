@@ -108,7 +108,9 @@ class PlaybackService : MediaLibraryService() {
         }
         val id = albumIds.randomOrNull() ?: return emptyList()
         val album = runCatching { repo.api.album(id) }.getOrNull() ?: return emptyList()
-        return AlbumQueue.mediaItems(album, repo)
+        // Fetched here rather than left to the car: the tiles are drawn by
+        // another process which cannot always load the cover URL itself.
+        return AlbumQueue.mediaItemsWithArtwork(album, repo)
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {

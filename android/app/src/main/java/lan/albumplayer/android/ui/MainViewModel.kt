@@ -4,8 +4,10 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import lan.albumplayer.android.data.AlbumDetail
 import lan.albumplayer.android.data.AlbumSummary
 import lan.albumplayer.android.data.LoginRequest
@@ -124,12 +126,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playAlbum(album: AlbumDetail, startIndex: Int = 0) {
         val repo = repository ?: return
-        player.play(AlbumQueue.mediaItems(album, repo), startIndex)
+        viewModelScope.launch {
+            // Fetching the cover touches the network, so it happens off the
+            // main thread; the bytes ride along in the metadata so surfaces
+            // that cannot fetch a URL still show art.
+            val items = withContext(Dispatchers.IO) {
+                AlbumQueue.mediaItemsWithArtwork(album, repo)
+            }
+            player.play(items, startIndex)
+        }
     }
 
     fun enqueueAlbum(album: AlbumDetail) {
         val repo = repository ?: return
-        player.enqueue(AlbumQueue.mediaItems(album, repo))
+        viewModelScope.launch {
+            val items = withContext(Dispatchers.IO) {
+                AlbumQueue.mediaItemsWithArtwork(album, repo)
+            }
+            player.enqueue(items)
+        }
     }
 
     /** Queue the library with the albums shuffled, never their tracks. */
@@ -142,6 +157,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // take a generous slice and shuffle that.
                 val chosen = _ui.value.albums.shuffled().take(40)
                 val detailed = chosen.map { repo.api.album(it.id) }
+                // Across many albums the covers would add up past what a Binder
+                // transaction carries, so the queue keeps the URI alone here.
                 player.play(AlbumQueue.flatten(detailed, repo))
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(error = e.message)
