@@ -40,22 +40,23 @@ if [[ ! -f "$LIBS/libc++.so.1" ]]; then
   fi
 fi
 
-# The head unit opens ALSA, which on a PipeWire system reaches PipeWire and then
-# segfaults during thread cleanup — the core dump lands in libpipewire, not in
-# the head unit binary. Redirecting ALSA to a null device is not enough on its
-# own; the audio server has to be out of reach entirely. Audio is not needed to
-# look at the interface.
-ALSA_CONF="${TMPDIR:-/tmp}/dhu-alsa-null.conf"
-cat > "$ALSA_CONF" <<'ALSA'
-</usr/share/alsa/alsa.conf>
-pcm.!default { type null }
-ctl.!default { type null }
-ALSA
-export ALSA_CONFIG_PATH="$ALSA_CONF"
-export PULSE_SERVER=none
-# An empty runtime directory hides the PipeWire and PulseAudio sockets.
+# The head unit segfaults on startup on a PipeWire system. The core dump points
+# at libpipewire rather than the head unit: it enumerates ALSA devices, ALSA
+# loads its PipeWire plugin, and a thread blocked in read is then cancelled with
+# an unwind that faults.
+#
+# Redirecting ALSA's default device is not enough — the stock alsa.conf pulls in
+# alsa.conf.d, which is where the PipeWire plugin is wired up, so including it
+# reintroduces exactly what needs avoiding. Pointing the plugin directory
+# somewhere empty is what actually stops it loading. The audio sockets are
+# hidden too, for the paths that reach PulseAudio directly.
+#
+# None of this costs anything here: audio is irrelevant to inspecting the
+# interface, and the car plays through the phone in any case.
+export ALSA_PLUGIN_DIR="${TMPDIR:-/tmp}/dhu-no-alsa-plugins"
 export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}/dhu-no-audio"
-mkdir -p "$XDG_RUNTIME_DIR"
+export PULSE_SERVER=none
+mkdir -p "$ALSA_PLUGIN_DIR" "$XDG_RUNTIME_DIR"
 
 DEVICE="${ANDROID_SERIAL:-$("$ADB" devices | awk 'NR==2 {print $1}')}"
 if [[ -z "${DEVICE:-}" ]]; then
