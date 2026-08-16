@@ -16,18 +16,46 @@ ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 ADB="$ANDROID_HOME/platform-tools/adb"
 DHU_DIR="$ANDROID_HOME/extras/google/auto"
 
-# The Desktop Head Unit wants LLVM's libc++, which many distributions do not
-# install. The SDK ships a copy, so borrow that rather than adding a package.
+# The Desktop Head Unit links against LLVM's libc++, which many distributions do
+# not install by default. Rather than requiring root, fetch the package and
+# unpack it here.
+#
+# It must be the real thing: the copy shipped with the Android emulator loads
+# but segfaults, being a different build against a different ABI. A near-miss on
+# a C++ standard library is worse than an outright missing one, because it fails
+# at run time instead of at link time.
 LIBS="${TMPDIR:-/tmp}/dhu-libs"
-mkdir -p "$LIBS"
-for lib in libc++.so.1 libc++abi.so.1; do
-  [[ -f "$LIBS/$lib" ]] && continue
-  for candidate in \
-      "$ANDROID_HOME/emulator/lib64/$lib" \
-      "/opt/android-studio/plugins/android-ndk/resources/lldb/lib64/$lib"; do
-    [[ -f "$candidate" ]] && cp -f "$candidate" "$LIBS/" && break
-  done
-done
+if [[ ! -f "$LIBS/libc++.so.1" ]]; then
+  mkdir -p "$LIBS"
+  if command -v pacman >/dev/null; then
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+    ( cd "$work"
+      for url in $(pacman -Sp libc++ libc++abi 2>/dev/null); do curl -sSLO "$url"; done
+      for pkg in *.pkg.tar.zst; do tar --use-compress-program=unzstd -xf "$pkg"; done
+      cp -a usr/lib/libc++*.so* "$LIBS/" )
+  else
+    echo "Install libc++ and libc++abi, then rerun." >&2
+    exit 1
+  fi
+fi
+
+# The head unit opens ALSA, which on a PipeWire system reaches PipeWire and then
+# segfaults during thread cleanup — the core dump lands in libpipewire, not in
+# the head unit binary. Redirecting ALSA to a null device is not enough on its
+# own; the audio server has to be out of reach entirely. Audio is not needed to
+# look at the interface.
+ALSA_CONF="${TMPDIR:-/tmp}/dhu-alsa-null.conf"
+cat > "$ALSA_CONF" <<'ALSA'
+</usr/share/alsa/alsa.conf>
+pcm.!default { type null }
+ctl.!default { type null }
+ALSA
+export ALSA_CONFIG_PATH="$ALSA_CONF"
+export PULSE_SERVER=none
+# An empty runtime directory hides the PipeWire and PulseAudio sockets.
+export XDG_RUNTIME_DIR="${TMPDIR:-/tmp}/dhu-no-audio"
+mkdir -p "$XDG_RUNTIME_DIR"
 
 DEVICE="${ANDROID_SERIAL:-$("$ADB" devices | awk 'NR==2 {print $1}')}"
 if [[ -z "${DEVICE:-}" ]]; then
@@ -41,6 +69,7 @@ echo "device: $DEVICE"
 echo "forwarded tcp:5277"
 
 cd "$DHU_DIR"
-echo "starting the head unit — if it exits immediately, the phone's head unit"
-echo "server is not running (Android Auto -> ⋮ -> Start head unit server)"
+echo "starting the head unit."
+echo "The phone's head unit server is one-shot: start it again from"
+echo "Android Auto -> ⋮ -> Start head unit server before each run."
 exec env LD_LIBRARY_PATH="$LIBS:." ./desktop-head-unit "$@"
