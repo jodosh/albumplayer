@@ -1,6 +1,8 @@
 package lan.albumplayer.android.ui
 
 import android.app.Application
+import android.net.ConnectivityManager
+import android.net.Network
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import lan.albumplayer.android.data.AlbumDetail
 import lan.albumplayer.android.data.AlbumSummary
+import lan.albumplayer.android.data.ConnectionErrors
+import lan.albumplayer.android.data.NetworkStatus
 import lan.albumplayer.android.data.LoginRequest
 import lan.albumplayer.android.data.PlayRequest
 import lan.albumplayer.android.data.Repository
@@ -36,6 +40,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The open listening session on the server, so history lands in one place. */
     private var sessionId: Long? = null
 
+    /** The search the grid is showing, so a retry repeats it. */
+    private var lastSearch: String? = null
+
+    /**
+     * Re-checks the connection whenever the phone's default network changes.
+     *
+     * Tailscale coming up or going down replaces the default network, so this
+     * is what makes the banner appear the moment the tunnel drops — rather than
+     * when you next tap something — and clears it, by retrying, once it is back.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = recheck()
+        override fun onLost(network: Network) = recheck()
+    }
+
+    private fun recheck() {
+        viewModelScope.launch {
+            if (!_ui.value.signedIn) return@launch
+            val repo = repository ?: return@launch
+            val blocked = ConnectionErrors.preflight(NetworkStatus.read(getApplication()), repo.baseUrl)
+            when {
+                blocked != null -> _ui.value = _ui.value.copy(error = explain(blocked, repo.baseUrl))
+                _ui.value.error != null -> retry()
+            }
+        }
+    }
+    private val connectivity = app.getSystemService(ConnectivityManager::class.java)
+
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
 
@@ -45,6 +77,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        runCatching { connectivity?.registerDefaultNetworkCallback(networkCallback) }
         viewModelScope.launch {
             val server = settings.currentServer()
             token = settings.currentToken()
@@ -79,7 +112,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     loading = false,
                     error = when (e) {
                         is Unauthorized -> "Wrong password"
-                        else -> e.message ?: "Could not reach the server"
+                        else -> describe(e, server.trim().trimEnd('/'))
                     },
                 )
             }
@@ -96,26 +129,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun loadAlbums(search: String? = null) {
         val repo = repository ?: return
+        lastSearch = search
         viewModelScope.launch {
-            _ui.value = _ui.value.copy(loading = true, error = null)
+            _ui.value = _ui.value.copy(loading = true)
+            // Known not to work (offline, or Tailscale off for a tailnet
+            // address): say so at once rather than after a connect timeout.
+            ConnectionErrors.preflight(NetworkStatus.read(getApplication()), repo.baseUrl)?.let {
+                _ui.value = _ui.value.copy(loading = false, error = explain(it, repo.baseUrl))
+                return@launch
+            }
             try {
                 val albums = repo.api.albums(search = search?.ifBlank { null })
-                _ui.value = _ui.value.copy(albums = albums, loading = false)
+                _ui.value = _ui.value.copy(albums = albums, loading = false, error = null)
             } catch (e: Unauthorized) {
-                _ui.value = _ui.value.copy(signedIn = false, loading = false)
+                // The saved token is dead; keeping it would only repeat this on
+                // every launch.
+                settings.clearToken()
+                token = null
+                _ui.value = _ui.value.copy(
+                    signedIn = false,
+                    loading = false,
+                    albums = emptyList(),
+                    error = "Your session expired. Sign in again.",
+                )
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(loading = false, error = e.message)
+                // Keep whatever albums are already showing; an error above a
+                // stale grid is more use than an empty one.
+                _ui.value = _ui.value.copy(loading = false, error = describe(e, repo.baseUrl))
             }
         }
     }
+
+    fun retry() = loadAlbums(lastSearch)
+
+    private fun describe(e: Throwable, serverUrl: String): String =
+        explain(ConnectionErrors.classify(e), serverUrl)
+
+    private fun explain(failure: ConnectionErrors.Failure, serverUrl: String): String =
+        ConnectionErrors.explain(failure, NetworkStatus.read(getApplication()), serverUrl).text
 
     fun openAlbum(id: Long) {
         val repo = repository ?: return
         viewModelScope.launch {
             try {
-                _ui.value = _ui.value.copy(openAlbum = repo.api.album(id))
+                _ui.value = _ui.value.copy(openAlbum = repo.api.album(id), error = null)
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(error = e.message)
+                _ui.value = _ui.value.copy(error = describe(e, repo.baseUrl))
             }
         }
     }
@@ -161,7 +220,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // transaction carries, so the queue keeps the URI alone here.
                 player.play(AlbumQueue.flatten(detailed, repo))
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(error = e.message)
+                _ui.value = _ui.value.copy(error = describe(e, repo.baseUrl))
             } finally {
                 _ui.value = _ui.value.copy(loading = false)
             }
@@ -188,6 +247,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
         player.release()
         super.onCleared()
     }

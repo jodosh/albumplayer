@@ -46,8 +46,16 @@ object AlbumQueue {
                         .setAlbumArtist(album.artist)
                         .setTrackNumber(track.trackNo)
                         .setDiscNumber(track.discNo)
+                        // Set only when there are no embedded bytes. Android Auto
+                        // prefers the URI whenever one is present and fetches it
+                        // from its own process with Glide, where it fails — the
+                        // log shows it retrying our address and giving up, which
+                        // is why the small card stayed grey while the full-screen
+                        // player, resolving the same URI in *this* process, was
+                        // fine. Offering only the bytes leaves it nothing to
+                        // prefer.
                         .setArtworkUri(
-                            if (album.hasCover) {
+                            if (album.hasCover && artwork == null) {
                                 android.net.Uri.parse(repository.coverUrl(album.id))
                             } else {
                                 null

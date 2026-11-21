@@ -2,6 +2,7 @@ package lan.albumplayer.android.playback
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -21,10 +22,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.guava.future
+import kotlinx.coroutines.withContext
+import androidx.media3.session.SessionError
 import lan.albumplayer.android.R
 import lan.albumplayer.android.data.Repository
 import lan.albumplayer.android.data.Settings
+import lan.albumplayer.android.data.ConnectionErrors
+import lan.albumplayer.android.data.ConnectionErrors.Failure
+import lan.albumplayer.android.data.NetworkStatus
 
 /**
  * Hosts the player, and serves the browse tree Android Auto reads.
@@ -42,6 +49,10 @@ import lan.albumplayer.android.data.Settings
  * while driving, which is not a thing to be doing. The interesting decision —
  * *what* to listen to — is left to the phone, at a standstill.
  */
+// `sendError` is how a failed load reaches the car's screen; Media3 still marks
+// it unstable, though Android Auto has honoured the underlying error state for
+// years.
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -50,6 +61,13 @@ class PlaybackService : MediaLibraryService() {
 
     /** Cached album list, so a tap in the car does not wait on a full fetch. */
     private var albumIds: List<Long> = emptyList()
+
+    /**
+     * Why the last attempt failed, shown under the car's one browse entry
+     * until an attempt succeeds. The car's error message disappears after a
+     * few seconds; this is still there at the next red light.
+     */
+    @Volatile private var lastFailure: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -100,18 +118,85 @@ class PlaybackService : MediaLibraryService() {
         return Repository(server) { token }.also { repository = it }
     }
 
-    /** Fetch a random album, already expanded into playable tracks. */
-    private suspend fun randomAlbumItems(): List<MediaItem> {
-        val repo = repository() ?: return emptyList()
-        if (albumIds.isEmpty()) {
-            albumIds = runCatching { repo.api.albums().map { it.id } }.getOrDefault(emptyList())
-        }
-        val id = albumIds.randomOrNull() ?: return emptyList()
-        val album = runCatching { repo.api.album(id) }.getOrNull() ?: return emptyList()
-        // Fetched here rather than left to the car: the tiles are drawn by
-        // another process which cannot always load the cover URL itself.
-        return AlbumQueue.mediaItemsWithArtwork(album, repo)
+    private sealed interface AlbumLoad {
+        class Loaded(val items: List<MediaItem>) : AlbumLoad
+        class Failed(val failure: Failure, val serverUrl: String) : AlbumLoad
     }
+
+    /**
+     * Fetch a random album, already expanded into playable tracks, and tell
+     * the car why when that is not possible.
+     *
+     * Network failures get one retry after a short pause, which is usually
+     * enough to ride out the phone switching from Wi-Fi to mobile data as the
+     * car leaves the driveway.
+     */
+    private suspend fun randomAlbumItems(): List<MediaItem>? {
+        var result = attemptRandomAlbum()
+        if (result is AlbumLoad.Failed && ConnectionErrors.isRetryable(result.failure)) {
+            delay(RETRY_DELAY_MS)
+            result = attemptRandomAlbum()
+        }
+        return when (result) {
+            is AlbumLoad.Loaded -> {
+                setLastFailure(null)
+                result.items
+            }
+
+            is AlbumLoad.Failed -> {
+                val message = ConnectionErrors.explain(
+                    result.failure, NetworkStatus.read(this), result.serverUrl,
+                )
+                Log.w(TAG, "random album failed: ${result.failure} -> ${message.text}")
+                session?.sendError(SessionError(message.code, message.text))
+                setLastFailure(message.text)
+                null
+            }
+        }
+    }
+
+    private suspend fun attemptRandomAlbum(): AlbumLoad {
+        val repo = repository() ?: return AlbumLoad.Failed(Failure.NotSignedIn, "")
+        ConnectionErrors.preflight(NetworkStatus.read(this), repo.baseUrl)?.let {
+            return AlbumLoad.Failed(it, repo.baseUrl)
+        }
+        return try {
+            if (albumIds.isEmpty()) albumIds = repo.api.albums().map { it.id }
+            val id = albumIds.randomOrNull()
+                ?: return AlbumLoad.Failed(Failure.EmptyLibrary, repo.baseUrl)
+            val album = repo.api.album(id)
+            // Fetched here rather than left to the car: the tiles are drawn by
+            // another process which cannot always load the cover URL itself.
+            AlbumLoad.Loaded(AlbumQueue.mediaItemsWithArtwork(album, repo))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val failure = ConnectionErrors.classify(e)
+            // Forget the cached client, so signing in again on the phone takes
+            // effect on the next tap rather than at the next service restart.
+            if (failure == Failure.SignedOut) repository = null
+            AlbumLoad.Failed(failure, repo.baseUrl)
+        }
+    }
+
+    private fun setLastFailure(text: String?) {
+        if (lastFailure == text) return
+        lastFailure = text
+        val session = session ?: return
+        android.os.Handler(session.player.applicationLooper).post {
+            session.notifyChildrenChanged(ROOT_ID, 1, null)
+        }
+    }
+
+    /** The current queue, so a failed tap leaves whatever is playing alone. */
+    private suspend fun currentQueue(player: Player): MediaSession.MediaItemsWithStartPosition =
+        withContext(Dispatchers.Main) {
+            MediaSession.MediaItemsWithStartPosition(
+                (0 until player.mediaItemCount).map(player::getMediaItemAt),
+                player.currentMediaItemIndex,
+                player.currentPosition,
+            )
+        }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {
 
@@ -150,17 +235,16 @@ class PlaybackService : MediaLibraryService() {
 
             COMMAND_RANDOM_ALBUM -> scope.future {
                 val items = randomAlbumItems()
-                if (items.isNotEmpty()) {
-                    withMainPlayer(session.player) {
-                        setMediaItems(items, 0, 0)
-                        prepare()
-                        play()
-                    }
+                    ?: return@future SessionResult(SessionError.ERROR_IO)
+                withMainPlayer(session.player) {
+                    setMediaItems(items, 0, 0)
+                    prepare()
+                    play()
                 }
                 SessionResult(SessionResult.RESULT_SUCCESS)
             }
 
-            else -> Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            else -> Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
         }
 
         override fun onGetLibraryRoot(
@@ -186,7 +270,7 @@ class PlaybackService : MediaLibraryService() {
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             val children = if (parentId == ROOT_ID) {
-                ImmutableList.of(playable(RANDOM_ID, "Play a random album"))
+                ImmutableList.of(randomEntry())
             } else {
                 ImmutableList.of()
             }
@@ -199,9 +283,9 @@ class PlaybackService : MediaLibraryService() {
             mediaId: String,
         ): ListenableFuture<LibraryResult<MediaItem>> = Futures.immediateFuture(
             if (mediaId == RANDOM_ID) {
-                LibraryResult.ofItem(playable(RANDOM_ID, "Play a random album"), null)
+                LibraryResult.ofItem(randomEntry(), null)
             } else {
-                LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+                LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
             }
         )
 
@@ -220,8 +304,12 @@ class PlaybackService : MediaLibraryService() {
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
             if (mediaItems.size == 1 && mediaItems[0].mediaId == RANDOM_ID) {
                 scope.future {
-                    val items = randomAlbumItems()
-                    MediaSession.MediaItemsWithStartPosition(items, 0, 0)
+                    // On failure, hand back the current queue: an empty list
+                    // here would replace it, and stop the album already
+                    // playing because the next one could not be fetched.
+                    randomAlbumItems()
+                        ?.let { MediaSession.MediaItemsWithStartPosition(it, 0, 0) }
+                        ?: currentQueue(mediaSession.player)
                 }
             } else {
                 Futures.immediateFuture(
@@ -257,12 +345,22 @@ class PlaybackService : MediaLibraryService() {
         )
         .build()
 
-    private fun playable(id: String, title: String) = MediaItem.Builder()
+    /**
+     * The car's one entry. Its subtitle doubles as a status line: after a
+     * failure it says why, until the next attempt succeeds.
+     */
+    private fun randomEntry() = playable(
+        RANDOM_ID,
+        "Play a random album",
+        lastFailure ?: "A record chosen at random",
+    )
+
+    private fun playable(id: String, title: String, subtitle: String) = MediaItem.Builder()
         .setMediaId(id)
         .setMediaMetadata(
             MediaMetadata.Builder()
                 .setTitle(title)
-                .setSubtitle("A record chosen at random")
+                .setSubtitle(subtitle)
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
@@ -291,7 +389,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     companion object {
+        private const val TAG = "PlaybackService"
         private const val ROOT_ID = "root"
+        private const val RETRY_DELAY_MS = 2_000L
         private const val RANDOM_ID = "random_album"
 
         const val COMMAND_NEXT_ALBUM = "lan.albumplayer.NEXT_ALBUM"

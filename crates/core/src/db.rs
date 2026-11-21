@@ -16,7 +16,16 @@ use rusqlite::Connection;
 
 use crate::Result;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
+
+const AUTH_SESSION_TABLE: &str = r#"
+-- Server login sessions, so a restart does not sign every device out. Only a
+-- hash of each token is stored: a copy of this file is not a working login.
+CREATE TABLE IF NOT EXISTS auth_session (
+    token_hash    TEXT    PRIMARY KEY,
+    expires_at_ms INTEGER NOT NULL
+);
+"#;
 
 const SCHEMA: &str = r#"
 CREATE TABLE artist (
@@ -139,6 +148,7 @@ CREATE TABLE setting (
     value TEXT NOT NULL
 );
 
+
 -- Derived play statistics. Never materialized, always recomputable.
 CREATE VIEW album_play_counts AS
     SELECT album_id,
@@ -211,6 +221,7 @@ impl Library {
         if version == 0 {
             let tx = self.conn.transaction()?;
             tx.execute_batch(SCHEMA)?;
+            tx.execute_batch(AUTH_SESSION_TABLE)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             tx.commit()?;
             return Ok(());
@@ -340,6 +351,12 @@ impl Library {
             tx.pragma_update(None, "user_version", 5)?;
             tx.commit()?;
         }
+        if version < 6 {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(AUTH_SESSION_TABLE)?;
+            tx.pragma_update(None, "user_version", 6)?;
+            tx.commit()?;
+        }
         Ok(())
     }
 
@@ -350,6 +367,40 @@ impl Library {
             "INSERT INTO library_root(path, added_at) VALUES (?1, ?2)
              ON CONFLICT(path) DO NOTHING",
             rusqlite::params![canonical.to_string_lossy(), crate::util::now_unix()],
+        )?;
+        Ok(())
+    }
+
+    /// Saved login sessions as `(token hash, expiry in unix ms)`, dropping
+    /// any that have already expired.
+    pub fn load_sessions(&self, now_ms: i64) -> Result<Vec<(String, i64)>> {
+        self.conn.execute(
+            "DELETE FROM auth_session WHERE expires_at_ms <= ?1",
+            [now_ms],
+        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT token_hash, expires_at_ms FROM auth_session")?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Record a session, or move an existing one's expiry.
+    pub fn save_session(&self, token_hash: &str, expires_at_ms: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO auth_session(token_hash, expires_at_ms) VALUES (?1, ?2)
+             ON CONFLICT(token_hash) DO UPDATE SET expires_at_ms = excluded.expires_at_ms",
+            rusqlite::params![token_hash, expires_at_ms],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_session(&self, token_hash: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM auth_session WHERE token_hash = ?1",
+            [token_hash],
         )?;
         Ok(())
     }
@@ -368,6 +419,21 @@ impl Library {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sessions_round_trip_and_expired_ones_are_dropped() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.save_session("live", 2_000).unwrap();
+        lib.save_session("stale", 500).unwrap();
+        lib.save_session("live", 3_000).unwrap(); // refresh moves the expiry
+
+        let mut loaded = lib.load_sessions(1_000).unwrap();
+        loaded.sort();
+        assert_eq!(loaded, vec![("live".to_string(), 3_000)]);
+
+        lib.delete_session("live").unwrap();
+        assert!(lib.load_sessions(1_000).unwrap().is_empty());
+    }
 
     #[test]
     fn fresh_database_is_at_current_version() {

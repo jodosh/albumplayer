@@ -6,7 +6,10 @@
 use std::sync::{Arc, Mutex};
 
 use albumplayer_core::{Library, scan};
-use albumplayer_server::{AppState, Config, api, auth::Auth};
+use albumplayer_server::{
+    AppState, Config, api,
+    auth::{Auth, SessionChange},
+};
 use anyhow::{Context, Result};
 use tower_http::trace::TraceLayer;
 
@@ -65,8 +68,22 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("preparing authentication")?;
 
+    // Sessions from the previous run, so a restart does not sign everyone out.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let saved = library
+        .load_sessions(now_ms)
+        .context("loading saved sessions")?;
+    tracing::info!(sessions = saved.len(), "restored sessions");
+    auth.restore(saved);
+
+    let library = Arc::new(Mutex::new(library));
+    auth.persist_to(spawn_session_writer(Arc::clone(&library)));
+
     let state = AppState {
-        library: Arc::new(Mutex::new(library)),
+        library,
         auth: Arc::new(auth),
         config: Arc::new(config.clone()),
     };
@@ -89,6 +106,35 @@ async fn main() -> Result<()> {
         .context("serving")?;
 
     Ok(())
+}
+
+/// Write session changes to the database on a thread of their own.
+///
+/// Login and verification only send on a channel, so neither ever waits on the
+/// database lock, which a long enrichment job may be holding. A failed write
+/// costs at most a sign-in after the next restart, so it is logged, not fatal.
+fn spawn_session_writer(
+    library: Arc<Mutex<Library>>,
+) -> std::sync::mpsc::Sender<SessionChange> {
+    let (tx, rx) = std::sync::mpsc::channel::<SessionChange>();
+    std::thread::Builder::new()
+        .name("session-writer".into())
+        .spawn(move || {
+            for change in rx {
+                let Ok(lib) = library.lock() else { return };
+                let result = match &change {
+                    SessionChange::Save { key, expires_at_ms } => {
+                        lib.save_session(key, *expires_at_ms)
+                    }
+                    SessionChange::Delete { key } => lib.delete_session(key),
+                };
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "could not save a session change");
+                }
+            }
+        })
+        .expect("spawning the session writer");
+    tx
 }
 
 /// Check the data directory can actually be written to.

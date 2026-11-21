@@ -153,6 +153,33 @@ fun LoginScreen(
     }
 }
 
+/**
+ * Why the library could not be loaded, in place of a silently empty grid.
+ *
+ * Loads also retry by themselves when the phone's network changes, so the
+ * button is for when you have fixed something the phone cannot see, such as
+ * restarting the server.
+ */
+@Composable
+fun ErrorBanner(message: String, onRetry: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        ) {
+            Text(message, fontSize = 14.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = onRetry) { Text("Retry") }
+        }
+    }
+}
+
 @Composable
 fun AlbumGrid(
     albums: List<AlbumSummary>,

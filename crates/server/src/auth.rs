@@ -12,11 +12,23 @@
 //! * **The password is hashed at startup** with Argon2id and the plaintext
 //!   dropped, so a later memory dump or accidental log of the config struct
 //!   does not hand over the credential.
+//! * **Sessions outlive the process.** Every change is sent to a
+//!   [`SessionChange`] channel, which the server drains into the database, and
+//!   saved sessions are [restored](Auth::restore) at startup. Before this, any
+//!   restart — an image update, a host reboot — signed every phone and desktop
+//!   out at once. Verification itself never touches the database, so a long
+//!   library scan holding it cannot stall requests.
+//! * **Sessions slide.** Each use pushes the expiry a full lifetime ahead, so a
+//!   device in regular use is never signed out; only one left idle for the
+//!   whole lifetime is.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::mpsc::Sender;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use blake2::{Blake2s256, Digest};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -62,11 +74,24 @@ struct Attempts {
     last_seen: Instant,
 }
 
+/// A session change to be written to durable storage.
+///
+/// `key` is a hash of the token, never the token itself, so the stored copy
+/// cannot be replayed as a login.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionChange {
+    Save { key: String, expires_at_ms: i64 },
+    Delete { key: String },
+}
+
 /// Holds the password hash, the live sessions, and the guess limiter.
 pub struct Auth {
     password_hash: String,
     session_ttl: Duration,
-    sessions: Mutex<HashMap<String, Instant>>,
+    /// Token hash → expiry in unix milliseconds. Wall-clock time rather than
+    /// `Instant`, because it has to mean the same thing after a restart.
+    sessions: Mutex<HashMap<String, i64>>,
+    store: OnceLock<Sender<SessionChange>>,
     policy: LoginPolicy,
     attempts: Mutex<HashMap<IpAddr, Attempts>>,
 }
@@ -95,6 +120,7 @@ impl Auth {
             password_hash,
             session_ttl,
             sessions: Mutex::new(HashMap::new()),
+            store: OnceLock::new(),
             policy,
             attempts: Mutex::new(HashMap::new()),
         })
@@ -124,25 +150,71 @@ impl Auth {
         self.forget(client);
 
         let token = hex(&random_bytes::<TOKEN_BYTES>()?);
-        let expires = Instant::now() + self.session_ttl;
+        let key = session_key(&token);
+        let now = now_ms();
+        let expires_at_ms = now + self.ttl_ms();
 
         let mut sessions = self.sessions.lock().map_err(|_| Error::Internal)?;
         // Opportunistically drop expired entries so the map cannot grow without
         // bound over a long-running deployment.
-        sessions.retain(|_, expiry| *expiry > Instant::now());
-        sessions.insert(token.clone(), expires);
+        sessions.retain(|_, expiry| *expiry > now);
+        sessions.insert(key.clone(), expires_at_ms);
+        drop(sessions);
+        self.persist(SessionChange::Save { key, expires_at_ms });
 
         Ok(token)
     }
 
-    /// True if the token names a live session.
+    /// True if the token names a live session. Using a session extends it.
     pub fn verify(&self, token: &str) -> bool {
-        let Ok(sessions) = self.sessions.lock() else {
+        let Ok(mut sessions) = self.sessions.lock() else {
             return false;
         };
-        sessions
-            .get(token)
-            .is_some_and(|expiry| *expiry > Instant::now())
+        let key = session_key(token);
+        let now = now_ms();
+        let Some(expiry) = sessions.get_mut(&key) else {
+            return false;
+        };
+        if *expiry <= now {
+            return false;
+        }
+
+        // Slide the expiry forward, but only write it out when it has moved
+        // by a meaningful fraction of the lifetime: audio streaming verifies
+        // on every range request, and each of those need not be a disk write.
+        let ttl = self.ttl_ms();
+        if ttl - (*expiry - now) >= (ttl / 30).max(1) {
+            *expiry = now + ttl;
+            let expires_at_ms = *expiry;
+            drop(sessions);
+            self.persist(SessionChange::Save { key, expires_at_ms });
+        }
+        true
+    }
+
+    /// Send every future session change to `store`. Set once, at startup.
+    pub fn persist_to(&self, store: Sender<SessionChange>) {
+        let _ = self.store.set(store);
+    }
+
+    /// Reinstate sessions saved by an earlier run, as `(token hash, expiry)`.
+    pub fn restore(&self, saved: impl IntoIterator<Item = (String, i64)>) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            let now = now_ms();
+            sessions.extend(saved.into_iter().filter(|(_, expiry)| *expiry > now));
+        }
+    }
+
+    fn persist(&self, change: SessionChange) {
+        if let Some(store) = self.store.get() {
+            // A closed channel means the writer has gone away at shutdown; the
+            // in-memory session is still valid for the rest of this run.
+            let _ = store.send(change);
+        }
+    }
+
+    fn ttl_ms(&self) -> i64 {
+        i64::try_from(self.session_ttl.as_millis()).unwrap_or(i64::MAX / 2)
     }
 
     /// How long this client must wait, if it is currently locked out.
@@ -192,9 +264,11 @@ impl Auth {
 
     /// Invalidate one session.
     pub fn logout(&self, token: &str) {
+        let key = session_key(token);
         if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.remove(token);
+            sessions.remove(&key);
         }
+        self.persist(SessionChange::Delete { key });
     }
 
     #[cfg(test)]
@@ -209,6 +283,19 @@ fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     getrandom::fill(&mut buffer)
         .map_err(|e| Error::Config(format!("no source of randomness: {e}")))?;
     Ok(buffer)
+}
+
+/// What a session is stored under: a hash of the token, so neither the
+/// database nor this map holds anything that works as a login if copied.
+fn session_key(token: &str) -> String {
+    hex(&Blake2s256::digest(token.as_bytes()))
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -403,6 +490,67 @@ mod tests {
         assert_eq!(auth.session_count(), 1);
         assert!(!auth.verify(&stale));
         assert!(!auth.verify(&fresh) || auth.verify(&fresh));
+    }
+
+    #[test]
+    fn a_session_survives_a_restart_through_the_store() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let before = auth();
+        before.persist_to(tx);
+        let token = before.login(IP, "correct horse battery").unwrap();
+
+        // What reaches the store is a hash, never the token itself.
+        let saved: Vec<(String, i64)> = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                SessionChange::Save { key, expires_at_ms } => Some((key, expires_at_ms)),
+                SessionChange::Delete { .. } => None,
+            })
+            .collect();
+        assert_eq!(saved.len(), 1);
+        assert_ne!(saved[0].0, token);
+
+        let after = auth();
+        assert!(!after.verify(&token), "a fresh server knows nothing yet");
+        after.restore(saved);
+        assert!(after.verify(&token), "restored from the store");
+    }
+
+    #[test]
+    fn logging_out_is_persisted() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let auth = auth();
+        auth.persist_to(tx);
+        let token = auth.login(IP, "correct horse battery").unwrap();
+        auth.logout(&token);
+        let changes: Vec<_> = rx.try_iter().collect();
+        assert!(matches!(changes.last(), Some(SessionChange::Delete { .. })));
+    }
+
+    #[test]
+    fn using_a_session_slides_its_expiry_forward() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let auth = Auth::new("correct horse battery", Duration::from_millis(300)).unwrap();
+        auth.persist_to(tx);
+        let token = auth.login(IP, "correct horse battery").unwrap();
+
+        // Keep using it past its original lifetime.
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(auth.verify(&token), "an active session must not lapse");
+        }
+        assert!(rx.try_iter().count() > 1, "refreshes reach the store");
+
+        // Idle for the whole lifetime, it does expire.
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(!auth.verify(&token));
+    }
+
+    #[test]
+    fn expired_sessions_are_not_restored() {
+        let auth = auth();
+        auth.restore([("k".to_string(), now_ms() - 1)]);
+        assert_eq!(auth.session_count(), 0);
     }
 
     #[test]

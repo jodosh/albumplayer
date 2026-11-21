@@ -78,6 +78,7 @@ private fun App(model: MainViewModel = viewModel()) {
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                     )
                 }
+                ui.error?.let { ErrorBanner(it, onRetry = model::retry) }
             }
         },
         bottomBar = {

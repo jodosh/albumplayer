@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets a failed load in the car say whether the phone is on Wi-Fi or
+         mobile data, and whether Tailscale (a VPN) is up. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- Audio keeps playing when the screen is off, which needs a foreground
          service; without it Android suspends the process within seconds. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

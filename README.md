@@ -322,6 +322,22 @@ fifty. Metadata crosses a Binder transaction capped at roughly a megabyte, and a
 full-size cover repeated across a long album would exceed it and break playback
 altogether — a worse fault than a missing thumbnail.
 
+**A failed load says why.** The usual causes look identical from the driver's
+seat: the phone handing over from Wi-Fi to mobile data, Tailscale having
+dropped, or the server being down. So a failure is diagnosed from the error and
+the phone's networks — Tailscale shows up as a VPN — and reported in the car as
+a message such as *Tailscale is off (on mobile data)*. It also stays as the
+subtitle of the random-album entry until a later attempt succeeds. If the
+server is a Tailscale address and no VPN is up, the app says so at once rather
+than waiting out a connect timeout. Other network errors get one retry after
+two seconds, which usually covers a handover. A failed attempt leaves the album
+already playing alone.
+
+On the phone, the same diagnosis appears above the library instead of a
+silently empty grid, with a Retry button. Loads also retry by themselves when
+the phone's network changes, including Tailscale reconnecting. A login the
+server no longer accepts returns you to the sign-in screen with that reason.
+
 Instrumented tests connect a `MediaBrowser` — exactly what Android Auto does —
 and assert the browse tree stays one entry deep. If a future change starts
 exposing the album list to the car, they fail.
@@ -432,7 +448,7 @@ cover cache and must persist.
 | `ALBUMPLAYER_ART_DIR` | `/data/art` | Cover cache; server and CLI must agree |
 | `ALBUMPLAYER_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALBUMPLAYER_SCAN_ON_START` | `true` | Unchanged files are skipped, so this is cheap |
-| `ALBUMPLAYER_SESSION_HOURS` | `720` | Login lifetime |
+| `ALBUMPLAYER_SESSION_HOURS` | `720` | How long an unused login lasts; each use extends it |
 | `ALBUMPLAYER_TRUST_PROXY` | `false` | Read the client address from `CF-Connecting-IP` / `X-Forwarded-For` |
 | `ALBUMPLAYER_UI_DIR` | `/app/ui` | Built web UI; the API still runs if it is absent |
 
@@ -546,6 +562,11 @@ send headers.
 | `POST /api/sessions` … `/end` | Album listening sessions |
 | `POST /api/plays` | Record a track listen |
 
+Sessions are stored in the database, so restarting or redeploying the server
+does not sign every device out. Only a hash of each token is kept: a copy of
+the database is not a working login. Each use pushes a session's expiry a full
+lifetime ahead, so a device in regular use is never signed out.
+
 Clients never see or send filesystem paths. Audio and covers are addressed by
 database ID; the server resolves the ID and then verifies the result really sits
 under a directory it is allowed to serve, so a stray symlink cannot escape the
@@ -577,7 +598,7 @@ either way.
 ## Development
 
 ```sh
-cargo test      # 158 tests: album identity, queue semantics, real playback,
+cargo test      # 163 tests: album identity, queue semantics, real playback,
                 #            loudness maths, auth, and path-traversal defences
 
 # Playback tests encode short files with ffmpeg and run a real GStreamer

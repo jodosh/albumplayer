@@ -13,9 +13,10 @@ albumplayer-core.workspace = true
 albumplayer-enrich.workspace = true
 anyhow.workspace = true
 argon2 = "0.5.3"
+# Already in the tree via argon2; hashes session tokens before they are stored.
+blake2 = "0.10.6"
 axum = "0.8.9"
 getrandom = "0.4.3"
-hex = "0.4.3"
 libc = "0.2.189"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
