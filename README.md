@@ -326,8 +326,12 @@ altogether — a worse fault than a missing thumbnail.
 seat: the phone handing over from Wi-Fi to mobile data, Tailscale having
 dropped, or the server being down. So a failure is diagnosed from the error and
 the phone's networks — Tailscale shows up as a VPN — and reported in the car as
-a message such as *Tailscale is off (on mobile data)*. It also stays as the
-subtitle of the random-album entry until a later attempt succeeds. If the
+a message such as *Tailscale is off (on mobile data)*. With nothing playing, the
+player is put into an error state carrying that message, which Android Auto
+keeps on its player screen; with an album already playing, it is a passing
+notice and the music carries on. It also stays as the subtitle of the
+random-album entry until a later attempt succeeds. `CarFailureTest` drives this
+through the platform `MediaBrowser`, as the car does. If the
 server is a Tailscale address and no VPN is up, the app says so at once rather
 than waiting out a connect timeout. Other network errors get one retry after
 two seconds, which usually covers a handover. A failed attempt leaves the album

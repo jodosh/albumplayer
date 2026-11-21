@@ -4,7 +4,7 @@ kotlin = "2.1.0"
 compose-bom = "2024.12.01"
 # Media3 is what makes this a real phone music player: background playback,
 # lock-screen and Bluetooth controls, Android Auto, and gapless.
-media3 = "1.5.1"
+media3 = "1.8.0"
 lifecycle = "2.8.7"
 coil = "2.7.0"
 retrofit = "2.11.0"

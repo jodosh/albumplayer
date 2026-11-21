@@ -7,6 +7,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.CommandButton
@@ -86,6 +87,14 @@ class PlaybackService : MediaLibraryService() {
         session = MediaLibrarySession.Builder(this, player, LibraryCallback())
             .setCustomLayout(customLayout())
             .build()
+
+        // Music starting by any route — the phone's own controls included —
+        // means a failure shown earlier no longer applies.
+        player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) session?.setPlaybackException(null)
+            }
+        })
     }
 
     /**
@@ -139,6 +148,7 @@ class PlaybackService : MediaLibraryService() {
         }
         return when (result) {
             is AlbumLoad.Loaded -> {
+                withContext(Dispatchers.Main) { session?.setPlaybackException(null) }
                 setLastFailure(null)
                 result.items
             }
@@ -148,7 +158,11 @@ class PlaybackService : MediaLibraryService() {
                     result.failure, NetworkStatus.read(this), result.serverUrl,
                 )
                 Log.w(TAG, "random album failed: ${result.failure} -> ${message.text}")
-                session?.sendError(SessionError(message.code, message.text))
+                // Media3 reads the player to build what the car sees, and
+                // ExoPlayer throws if read off its own thread. Doing this from
+                // the IO dispatcher once failed the whole request, so the car
+                // showed only its own generic error.
+                withContext(Dispatchers.Main) { report(message) }
                 setLastFailure(message.text)
                 null
             }
@@ -177,6 +191,36 @@ class PlaybackService : MediaLibraryService() {
             if (failure == Failure.SignedOut) repository = null
             AlbumLoad.Failed(failure, repo.baseUrl)
         }
+    }
+
+    /**
+     * Show a failure in the car. Main thread only.
+     *
+     * With nothing playing, the player is put into an error state carrying the
+     * message: Android Auto shows that on its player screen until it clears,
+     * which is what a driver glancing over needs. With an album already
+     * playing, that would replace the music with an error screen, so it is a
+     * passing notice instead and playback carries on.
+     */
+    private fun report(message: ConnectionErrors.Message) {
+        val session = session ?: return
+        val player = session.player
+        if (player.mediaItemCount > 0 && player.playWhenReady) {
+            session.sendError(SessionError(message.code, message.text))
+        } else {
+            session.setPlaybackException(
+                PlaybackException(message.text, null, playbackErrorCode(message.code))
+            )
+        }
+    }
+
+    /** The player-error code closest to a session-error code. */
+    private fun playbackErrorCode(sessionCode: Int): Int = when (sessionCode) {
+        SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED ->
+            PlaybackException.ERROR_CODE_AUTHENTICATION_EXPIRED
+        SessionError.ERROR_SESSION_SETUP_REQUIRED -> PlaybackException.ERROR_CODE_SETUP_REQUIRED
+        SessionError.ERROR_IO -> PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+        else -> PlaybackException.ERROR_CODE_UNSPECIFIED
     }
 
     private fun setLastFailure(text: String?) {
