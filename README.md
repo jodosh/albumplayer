@@ -7,8 +7,9 @@ plays by album. Shuffle reorders albums and leaves their track order intact.
 
 ## Status
 
-**Phases 1 and 2 complete** — scanning, storage, the play-history log, and
-gapless album playback, all driven from a CLI. The desktop UI is not built yet.
+**Phases 1–4b complete** — the CLI, the HTTP server with its Svelte web UI, the
+Tauri desktop shell, and the Android app with Android Auto. Remote access works
+through a private Tailscale sidecar; nothing is exposed to the public internet.
 
 | Phase | Contents | State |
 |---|---|---|
@@ -20,7 +21,7 @@ gapless album playback, all driven from a CLI. The desktop UI is not built yet.
 | 3c | Tauri v2 desktop shell with gapless GStreamer playback | done |
 | 4 | Android app: Kotlin, Compose and Media3 | browse and play |
 | 4b | Android Auto: one button, no browsing | done |
-| 5 | Exposure: TLS and remote access | not started |
+| 5 | Exposure: TLS and remote access | Tailscale sidecar with HTTPS |
 
 ## Try it
 
@@ -44,6 +45,7 @@ specifically in terms of how they will break album-order playback.
 | `album <ID>` | Tracklist, grouped by disc |
 | `stats` | Library totals |
 | `doctor` | Tagging problems that affect album playback (9 categories) |
+| `roots` | List the registered library roots |
 | `log <ALBUM_ID>` | Record a listen by hand (stands in for the engine) |
 | `play` | Play albums (`--all`, `--shuffle`, `--repeat album\|queue`, `--sink`) |
 | `replaygain` | Measure album loudness with ffmpeg (`--jobs`, `--force`, `--limit`) |
@@ -162,9 +164,9 @@ had. Albums that come back empty are marked as checked so later runs skip them.
 
 ### The web UI
 
-Svelte 5 and Vite, built to a ~60 kB bundle that the server serves itself. The
-same bundle will be wrapped by the desktop shell, so there is one interface to
-maintain rather than two.
+Svelte 5 and Vite, built to a ~75 kB bundle that the server serves itself. The
+desktop shell wraps the same bundle, so there is one interface to maintain
+rather than two.
 
 It enforces the same album-first rules as the Rust engine: the queue holds
 albums, shuffle reorders albums and never their tracks, and next-track and
@@ -177,8 +179,8 @@ Two details worth knowing:
   the artist and title, with the album's initials — rather than a grey square.
 - **Browser playback is only near-gapless.** Two `<audio>` elements alternate so
   the next track is buffered before the current one ends, which is as close as a
-  browser gets without Media Source Extensions. The desktop shell will route
-  audio through GStreamer and be genuinely gapless. Album ReplayGain is applied
+  browser gets without Media Source Extensions. The desktop shell routes audio
+  through GStreamer and is genuinely gapless. Album ReplayGain is applied
   either way, though an `<audio>` element cannot amplify above unity, so
   positive gain only avoids attenuation.
 
@@ -204,7 +206,7 @@ The split:
   channel so it can log what was heard.
 
 History stays server-side on purpose: one listening record across the desktop, a
-browser, and eventually a phone.
+browser, and the phone.
 
 The shell needs a server address — inside Tauri `window.location.origin` is
 `tauri://localhost`, which is not a server — so the login form requires one.
@@ -236,6 +238,9 @@ cargo install tauri-cli --version "^2" --locked
 cd crates/desktop && cargo tauri bundle
 sudo dpkg -i ../../target/release/bundle/deb/AlbumPlayer_*_amd64.deb
 ```
+
+On macOS the same `cargo tauri bundle` produces an `.app` and a `.dmg` under
+`target/release/bundle/`.
 
 The packages depend on the GStreamer plugin sets explicitly. GStreamer loads
 its decoders at runtime, so a package that omits them installs perfectly well
@@ -328,6 +333,10 @@ cd android && ANDROID_SERIAL=<device> ./gradlew :app:connectedDebugAndroidTest
 Sideloaded media apps only appear in Android Auto once its developer settings
 allow unknown sources.
 
+To see the car interface without a car, `./run-head-unit.sh` runs Android
+Auto's desktop head unit against a USB-connected phone, so logcat keeps working
+while it is projected. Phone-side setup is in the script's header.
+
 ### Plays are events, never counters
 
 `play_event` and `album_session` are append-only. Every "how many times"
@@ -376,10 +385,6 @@ what it read and leaves the rest alone, because those files are still on disk.
 time, so seeking forward past most of a track will mark it played. Good enough
 for the completion rule; worth revisiting if the statistics start to matter.
 
-Nine files in the development library remain unreadable even in lenient mode,
-though ffprobe handles them. Closing that gap means shelling out to ffprobe as a
-last resort.
-
 Track rows are keyed by path, so *moving* files splits track-level history even
 though album-level history survives via the tag-based identity key. Album plays
 are the statistic this player is built around, so this is an accepted tradeoff
@@ -401,8 +406,7 @@ android/             Kotlin app: Compose interface, Media3 playback
 **One server, many clients.** The server owns the library, the database and the
 play history, and runs in a container with the music mounted read-only. It has
 no sound card and plays nothing; every client decodes for itself. That is what
-lets a desktop app, a browser and eventually a phone share a single listening
-history.
+lets a desktop app, a browser and a phone share a single listening history.
 
 The desktop app streams over HTTP and decodes with GStreamer, so it keeps true
 gapless playback — `playbin3` handles `https://` URIs as happily as local files.
@@ -430,6 +434,7 @@ cover cache and must persist.
 | `ALBUMPLAYER_SCAN_ON_START` | `true` | Unchanged files are skipped, so this is cheap |
 | `ALBUMPLAYER_SESSION_HOURS` | `720` | Login lifetime |
 | `ALBUMPLAYER_TRUST_PROXY` | `false` | Read the client address from `CF-Connecting-IP` / `X-Forwarded-For` |
+| `ALBUMPLAYER_UI_DIR` | `/app/ui` | Built web UI; the API still runs if it is absent |
 
 Scanning and enrichment run inside the container:
 
@@ -546,31 +551,6 @@ database ID; the server resolves the ID and then verifies the result really sits
 under a directory it is allowed to serve, so a stray symlink cannot escape the
 music tree.
 
-## Development
-
-```sh
-cargo test      # 145 tests: album identity, queue semantics, real playback,
-                #            loudness maths, auth, and path-traversal defences
-
-# Playback tests encode short files with ffmpeg and run a real GStreamer
-# pipeline into a fake sink; they skip themselves if either is unavailable.
-cargo clippy --all-targets
-```
-
-## License
-
-Dual-licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option. This is the usual arrangement in the Rust ecosystem: MIT is the
-simpler licence, and Apache-2.0 adds an explicit patent grant, which is worth
-having in audio software where codec patent claims are not hypothetical.
-
-Unless you state otherwise, any contribution you submit shall be dual-licensed
-as above, with no additional terms.
-
 ### Guessing the password
 
 Argon2 alone does not protect a single-password login. Verification takes about
@@ -594,9 +574,39 @@ engages. Left off behind a tunnel, every request appears to come from the proxy
 and one attacker locks out the household — so it must match the deployment
 either way.
 
+## Development
+
+```sh
+cargo test      # 158 tests: album identity, queue semantics, real playback,
+                #            loudness maths, auth, and path-traversal defences
+
+# Playback tests encode short files with ffmpeg and run a real GStreamer
+# pipeline into a fake sink; they skip themselves if either is unavailable.
+cargo clippy --all-targets
+```
+
+## License
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. This is the usual arrangement in the Rust ecosystem: MIT is the
+simpler licence, and Apache-2.0 adds an explicit patent grant, which is worth
+having in audio software where codec patent claims are not hypothetical.
+
+Unless you state otherwise, any contribution you submit shall be dual-licensed
+as above, with no additional terms.
+
 ### Dependencies
 
-Every Rust dependency is permissively licensed. GStreamer and WebKitGTK are
+The CLI, server and engine use only permissively licensed Rust crates. The
+desktop shell additionally pulls in five MPL-2.0 crates through Tauri
+(`cssparser`, `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`).
+MPL-2.0 is copyleft per file: it only obliges sharing changes to those crates'
+own files, which this project does not modify, so it places no constraint on
+the dual licence here. GStreamer and WebKitGTK are
 LGPL-2.1 and are linked dynamically, which imposes no constraint on this
 project's licence. No GPL-licensed GStreamer plugin is required to decode
 mp3, AAC, Opus or FLAC.
