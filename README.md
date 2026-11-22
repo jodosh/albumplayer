@@ -485,8 +485,8 @@ Portainer prefixes stack volumes with the stack name, so the volume is likely
 putting the server on a private WireGuard mesh with nothing exposed to the
 public internet.
 
-The sidecar runs Tailscale *inside a container's network namespace*, so the
-host's DNS, routing table and firewall rules are untouched. That matters on a
+Tailscale runs in its own container, so the host's DNS, routing table and
+firewall rules are untouched. That matters on a
 machine already running something that works — a Cloudflare tunnel, say —
 because backing this out is `compose down` rather than unpicking changes to the
 host. A Tailscale install on the host is simpler, but it rewrites
@@ -496,8 +496,17 @@ setup (`--accept-dns=false` avoids that, at the cost of the names).
 ```sh
 cp .env.example .env      # add TS_AUTHKEY alongside the password
 docker compose -f docker-compose.tailscale.yml up -d
-docker exec albumplayer-tailscale tailscale serve --bg 8080
+docker exec albumplayer-tailscale tailscale serve --bg http://172.30.251.10:8080
 ```
+
+The two containers are peers on a small bridge network with fixed addresses,
+and `serve` proxies across it. The server does not join the sidecar's network
+namespace (`network_mode: service:`), because after a Docker daemon restart,
+which ignores `depends_on`, a server restored before its sidecar fails to start
+and is never retried. As peers, either can start or restart first. The fixed
+addresses keep the serve target valid and suit hosts such as ASUSTOR ADM that
+manage Docker's port forwarding themselves; pick another subnet if
+`172.30.251.0/24` is in use.
 
 In Portainer, set the stack's **Compose path** to
 `docker-compose.tailscale.yml`; it defaults to `docker-compose.yml`. **Keep the
@@ -517,7 +526,7 @@ Be careful of the neighbouring command: `tailscale funnel` publishes to the
 public internet. `serve` does not.
 
 **Which address to use where.** Tailscale prefers direct connections and only
-relays when it cannot make one. Inside a container namespace the address it
+relays when it cannot make one. From inside a container the address it
 advertises is Docker-internal, which a phone on your own wifi cannot reach, so
 *at home* a Tailscale client is relayed rather than direct. Port 8080 is still
 published on the LAN for that reason:
@@ -528,9 +537,8 @@ published on the LAN for that reason:
 | Phone away from home | `https://albumplayer.<tailnet>.ts.net` | direct, via NAT traversal |
 | Phone at home | either | the tailnet address is relayed; the LAN one is not |
 
-Leave `ALBUMPLAYER_TRUST_PROXY` off. `tailscale serve` presents the genuine peer
-address, and trusting forwarded headers would let a forged one evade the login
-lockout.
+Leave `ALBUMPLAYER_TRUST_PROXY` off. Trusting forwarded headers would let a
+forged one evade the login lockout.
 
 ### Moving an existing library into the container
 

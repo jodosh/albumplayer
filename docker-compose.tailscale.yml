@@ -3,25 +3,39 @@
 # Deploy as a Portainer stack, or:
 #   docker compose -f docker-compose.tailscale.yml up -d
 #
-# Tailscale runs as a sidecar and the server shares its network namespace, so
-# the host's DNS, routing table and firewall rules are never modified. That
-# containment is the point: an existing Cloudflare tunnel on the same machine
-# carries on exactly as before, and backing this out is `compose down`.
+# Tailscale runs in its own container and the host's DNS, routing table and
+# firewall rules are never modified. That containment is the point: an existing
+# Cloudflare tunnel on the same machine carries on exactly as before, and
+# backing this out is `compose down`.
+#
+# The two containers are independent peers on a small bridge network, and
+# `tailscale serve` proxies to the server across it. Neither needs the other to
+# start: after a Docker daemon restart, which ignores `depends_on`, each comes
+# back from its own restart policy in whatever order. (An earlier version ran
+# the server inside the sidecar's network namespace with `network_mode:
+# service:tailscale`; if the server was restored first it failed to start with
+# exit 128 and Docker never retried it.)
 #
 # HTTPS is turned on once, after the stack first comes up:
 #
-#   docker exec albumplayer-tailscale tailscale serve --bg 8080
+#   docker exec albumplayer-tailscale tailscale serve --bg http://172.30.251.10:8080
 #
 # That is deliberately not a mounted config file. A bind mount would tie this
 # stack to a checkout of the repository and break if it were pasted into
 # Portainer's web editor; the setting persists in the state volume anyway, so
 # it only has to be done once.
 #
-# The trade: inside the namespace Tailscale advertises a Docker-internal
-# address, which a phone on your own wifi cannot reach, so at home the app is
-# relayed rather than direct. Away from home it is a direct connection as usual,
-# since NAT traversal uses the publicly-discovered endpoint. Port 8080 is still
-# published on the LAN for clients at home, which is the case that matters.
+# Fixed addresses: on hosts that program Docker's port forwarding themselves
+# (ASUSTOR ADM runs dockerd with --iptables=false and rewrites its own rules
+# only when Docker restarts), a published port must keep the same container IP
+# across stack updates. The serve target above relies on it too. Change the
+# subnet if 172.30.251.0/24 is taken on your host.
+#
+# The trade: Tailscale advertises a Docker-internal address, which a phone on
+# your own wifi cannot reach, so at home the app is relayed rather than direct.
+# Away from home it is a direct connection as usual, since NAT traversal uses
+# the publicly-discovered endpoint. Port 8080 is published on the LAN for
+# clients at home, which is the case that matters.
 services:
   tailscale:
     image: tailscale/tailscale:latest
@@ -46,10 +60,9 @@ services:
     cap_add:
       - NET_ADMIN
 
-    # Clients at home reach the server on the LAN through this mapping; the
-    # app container has no ports of its own, sharing this namespace.
-    ports:
-      - "8080:8080"
+    networks:
+      albumplayer:
+        ipv4_address: 172.30.251.11
 
   albumplayer:
     build: .
@@ -57,20 +70,13 @@ services:
     container_name: albumplayer
     restart: unless-stopped
 
-    # Shares the sidecar's network namespace, so binding 0.0.0.0:8080 here is
-    # what Tailscale serves and what the LAN mapping above exposes.
-    network_mode: service:tailscale
-    depends_on:
-      - tailscale
-
     environment:
       ALBUMPLAYER_PASSWORD: ${ALBUMPLAYER_PASSWORD:?set this in a .env file}
       ALBUMPLAYER_SCAN_ON_START: "true"
       ALBUMPLAYER_SESSION_HOURS: "720"
       RUST_LOG: "albumplayer_server=info"
-      # Leave proxy trust off. `tailscale serve` presents the real peer address,
-      # and trusting forwarded headers would let a forged one evade the login
-      # lockout.
+      # Leave proxy trust off. Trusting forwarded headers would let a forged
+      # one evade the login lockout.
       ALBUMPLAYER_TRUST_PROXY: "false"
 
     volumes:
@@ -80,8 +86,22 @@ services:
         read_only: true
       - albumplayer-data:/data
 
+    # Clients at home reach the server on the LAN through this mapping.
+    ports:
+      - "8080:8080"
+
+    networks:
+      albumplayer:
+        ipv4_address: 172.30.251.10
+
     security_opt:
       - no-new-privileges:true
+
+networks:
+  albumplayer:
+    ipam:
+      config:
+        - subnet: 172.30.251.0/24
 
 volumes:
   albumplayer-data:
