@@ -16,11 +16,15 @@
 //! Keeping history on the server side is deliberate: one listening history
 //! across the desktop, a browser and eventually a phone.
 
+mod now_playing;
+
 use std::sync::Mutex;
 
 use albumplayer_engine::{PlayState, Player, PlayerEvent, QueuedAlbum, QueuedTrack, Repeat, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
+
+use now_playing::{AlbumInfo, Catalogue, NowPlaying};
 
 /// An album handed over from the UI, with stream URLs already signed.
 #[derive(Debug, Deserialize)]
@@ -30,7 +34,25 @@ struct AlbumRequest {
     artist: String,
     gain_db: Option<f64>,
     peak: Option<f64>,
+    /// Signed cover URL for the system media controls, if the album has art.
+    #[serde(default)]
+    cover_url: Option<String>,
     tracks: Vec<TrackRequest>,
+}
+
+impl AlbumRequest {
+    fn info(&self) -> AlbumInfo {
+        AlbumInfo {
+            title: self.title.clone(),
+            artist: self.artist.clone(),
+            cover_url: self.cover_url.clone(),
+            tracks: self
+                .tracks
+                .iter()
+                .map(|t| (t.id, (t.title.clone(), t.duration_ms)))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,12 +140,22 @@ transport!(prev_album);
 transport!(clear);
 
 #[tauri::command]
-fn play_album(engine: State<'_, Engine>, album: AlbumRequest) -> Result<(), String> {
+fn play_album(
+    engine: State<'_, Engine>,
+    catalogue: State<'_, Catalogue>,
+    album: AlbumRequest,
+) -> Result<(), String> {
+    catalogue.remember(album.id, album.info());
     engine.with(|p| p.play_album(album.into()).map_err(|e| e.to_string()))?
 }
 
 #[tauri::command]
-fn enqueue(engine: State<'_, Engine>, album: AlbumRequest) -> Result<(), String> {
+fn enqueue(
+    engine: State<'_, Engine>,
+    catalogue: State<'_, Catalogue>,
+    album: AlbumRequest,
+) -> Result<(), String> {
+    catalogue.remember(album.id, album.info());
     engine.with(|p| p.enqueue(album.into()).map_err(|e| e.to_string()))?
 }
 
@@ -228,9 +260,11 @@ fn main() {
         .setup(|app| {
             // A machine with no working audio output should still show the
             // library, so a failed engine is reported rather than fatal.
+            let catalogue = Catalogue::default();
             let engine = match Player::new() {
                 Ok((player, events)) => {
-                    forward_events(app.handle().clone(), events);
+                    let control = player.control();
+                    forward_events(app.handle().clone(), events, control, catalogue.clone());
                     Some(player)
                 }
                 Err(e) => {
@@ -239,6 +273,7 @@ fn main() {
                 }
             };
             app.manage(Engine(Mutex::new(engine)));
+            app.manage(catalogue);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -268,9 +303,27 @@ fn main() {
 ///
 /// The UI needs these to write the play log: `TrackFinished` carries how much
 /// was actually heard, which is what decides whether a listen counted.
-fn forward_events(app: tauri::AppHandle, events: std::sync::mpsc::Receiver<PlayerEvent>) {
+///
+/// The same events keep the system media controls current. Those live on this
+/// thread, created here and never moved, which is all some platforms allow.
+fn forward_events(
+    app: tauri::AppHandle,
+    events: std::sync::mpsc::Receiver<PlayerEvent>,
+    control: albumplayer_engine::PlayerControl,
+    catalogue: Catalogue,
+) {
     std::thread::spawn(move || {
+        let mut now_playing = match NowPlaying::new(app.clone(), control, catalogue) {
+            Ok(controls) => Some(controls),
+            Err(e) => {
+                eprintln!("system media controls unavailable: {e:?}");
+                None
+            }
+        };
         for event in events {
+            if let Some(controls) = now_playing.as_mut() {
+                controls.update(&event);
+            }
             let (name, payload) = match event {
                 PlayerEvent::TrackStarted {
                     album_id,
