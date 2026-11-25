@@ -484,10 +484,15 @@ class NativePlayer {
   async playAll(albums: AlbumDetail[], shuffle = false) {
     if (albums.length === 0) return;
     this.remember(albums);
-    const [first, ...rest] = albums;
+    // Choose the opening album here and turn shuffle on before queueing the
+    // rest. Shuffling after the fact would reorder an album that is already
+    // audible; with shuffle on, the engine slots each new album in at random.
+    const pick = shuffle ? Math.floor(Math.random() * albums.length) : 0;
+    const first = albums[pick];
+    const rest = albums.filter((_, i) => i !== pick);
     await native.invoke('play_album', { album: this.wire(first) });
-    for (const album of rest) await native.invoke('enqueue', { album: this.wire(album) });
     if (shuffle) await this.setShuffle(true);
+    for (const album of rest) await native.invoke('enqueue', { album: this.wire(album) });
   }
 
   async setShuffle(on: boolean) {
