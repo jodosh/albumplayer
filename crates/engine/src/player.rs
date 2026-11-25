@@ -453,6 +453,19 @@ fn handle_command(
                 q.set_shuffle(on);
                 true
             });
+            // Shuffling an untouched queue can move a different album into the
+            // first slot. If a track is already loaded, the pipeline would keep
+            // playing it while the queue (and every client) reports the new
+            // one, so start whatever the queue now points at.
+            let loaded = inner.playing.as_ref().map(|p| p.track_id);
+            let wanted = current(queue).map(|(_, track)| track.id);
+            if loaded.is_some() && loaded != wanted {
+                let was_paused = inner.state == PlayState::Paused;
+                start_current(inner, queue, gapless, events, true);
+                if was_paused {
+                    set_state(inner, queue, PlayState::Paused, events);
+                }
+            }
         }
         Command::SetRepeat(repeat) => {
             with_queue(queue, |q| {

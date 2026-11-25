@@ -83,6 +83,90 @@ class BrowserPlayer {
         // One unplayable file should not end the listening session.
         if (element === this.primary) void this.next();
       });
+      // Keep the lock screen and media keys honest about pause state, including
+      // when something other than our own buttons paused the element.
+      element.addEventListener('play', () => {
+        if (element === this.primary) this.publishState(true);
+      });
+      element.addEventListener('pause', () => {
+        if (element === this.primary) this.publishState(false);
+      });
+      element.addEventListener('loadedmetadata', () => {
+        if (element === this.primary) this.publishPosition();
+      });
+      element.addEventListener('seeked', () => {
+        if (element === this.primary) this.publishPosition();
+      });
+    }
+    this.bindMediaSession();
+  }
+
+  /**
+   * Hand the transport to the operating system: the lock screen, media keys,
+   * and anything else speaking MPRIS (Linux), Now Playing (macOS) or SMTC
+   * (Windows) via the browser.
+   *
+   * Media Session has no next-album action, so previous/next here are tracks,
+   * matching what the hardware keys mean everywhere else.
+   */
+  private bindMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    const session = navigator.mediaSession;
+    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ['play', () => void this.play()],
+      ['pause', () => this.pause()],
+      ['stop', () => this.pause()],
+      ['previoustrack', () => void this.previous()],
+      ['nexttrack', () => void this.next()],
+      ['seekto', (d) => d.seekTime != null && this.seek(d.seekTime * 1000)],
+      ['seekbackward', (d) => this.seek(this.positionMs - (d.seekOffset ?? 10) * 1000)],
+      ['seekforward', (d) => this.seek(this.positionMs + (d.seekOffset ?? 10) * 1000)],
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        session.setActionHandler(action, handler);
+      } catch {
+        // Older browsers reject actions they do not know; the rest still work.
+      }
+    }
+  }
+
+  /** Tell the OS what is playing now. */
+  private publishMetadata() {
+    if (!('mediaSession' in navigator)) return;
+    const { album, track } = this;
+    if (!album || !track) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.artist || album.artist,
+      album: album.title,
+      artwork: album.has_cover ? [{ src: api.coverUrl(album.id) }] : [],
+    });
+  }
+
+  private publishState(playing: boolean) {
+    this.playing = playing;
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+    }
+    this.publishPosition();
+  }
+
+  private publishPosition() {
+    if (!('mediaSession' in navigator) || !this.primary) return;
+    const duration = this.primary.duration;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration,
+        position: Math.min(this.primary.currentTime, duration),
+        playbackRate: this.primary.playbackRate || 1,
+      });
+    } catch {
+      /* position is a nicety */
     }
   }
 
@@ -159,6 +243,7 @@ class BrowserPlayer {
 
     this.primary.src = api.streamUrl(track.id);
     this.applyGain();
+    this.publishMetadata();
     try {
       await this.primary.play();
       this.playing = true;
@@ -262,18 +347,26 @@ class BrowserPlayer {
   }
 
   async toggle() {
+    if (this.playing) this.pause();
+    else await this.play();
+  }
+
+  async play() {
     if (!this.primary || !this.track) return;
-    if (this.playing) {
-      this.primary.pause();
-      this.playing = false;
-    } else {
-      await this.primary.play();
-      this.playing = true;
-    }
+    await this.primary.play();
+    this.playing = true;
+  }
+
+  pause() {
+    if (!this.primary) return;
+    this.primary.pause();
+    this.playing = false;
   }
 
   seek(ms: number) {
-    if (this.primary) this.primary.currentTime = ms / 1000;
+    if (!this.primary) return;
+    const end = Number.isFinite(this.primary.duration) ? this.primary.duration : Infinity;
+    this.primary.currentTime = Math.min(Math.max(0, ms / 1000), end);
   }
 
   setVolume(value: number) {
@@ -452,6 +545,7 @@ class NativePlayer {
       artist: album.artist,
       gain_db: album.gain_db,
       peak: album.peak,
+      cover_url: album.has_cover ? api.coverUrl(album.id) : null,
       tracks: album.tracks.map((t) => ({
         id: t.id,
         url: api.streamUrl(t.id),
@@ -484,10 +578,15 @@ class NativePlayer {
   async playAll(albums: AlbumDetail[], shuffle = false) {
     if (albums.length === 0) return;
     this.remember(albums);
-    const [first, ...rest] = albums;
+    // Choose the opening album here and turn shuffle on before queueing the
+    // rest. Shuffling after the fact would reorder an album that is already
+    // audible; with shuffle on, the engine slots each new album in at random.
+    const pick = shuffle ? Math.floor(Math.random() * albums.length) : 0;
+    const first = albums[pick];
+    const rest = albums.filter((_, i) => i !== pick);
     await native.invoke('play_album', { album: this.wire(first) });
-    for (const album of rest) await native.invoke('enqueue', { album: this.wire(album) });
     if (shuffle) await this.setShuffle(true);
+    for (const album of rest) await native.invoke('enqueue', { album: this.wire(album) });
   }
 
   async setShuffle(on: boolean) {

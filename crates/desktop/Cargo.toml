@@ -16,3 +16,7 @@ albumplayer-engine.workspace = true
 serde.workspace = true
 serde_json = "1"
 tauri = { version = "2", features = [] }
+# Lock screen and media keys. The libdbus backend rather than zbus: souvlaki
+# pins zbus 5, whose zvariant/zbus_names crates are now unmaintained (merged
+# into zbus 6). libdbus is on every Linux desktop already.
+souvlaki = { version = "0.9.3", default-features = false, features = ["use_dbus"] }

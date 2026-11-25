@@ -58,10 +58,15 @@ impl Fixture {
 
     /// Build an album of `count` one-second tracks.
     fn album(&self, id: i64, count: usize) -> Option<QueuedAlbum> {
+        self.album_of(id, count, 1.0)
+    }
+
+    /// Build an album of `count` tracks, each `seconds` long.
+    fn album_of(&self, id: i64, count: usize, seconds: f32) -> Option<QueuedAlbum> {
         let mut tracks = Vec::new();
         for i in 0..count {
             let path = self.dir.join(format!("album{id}/{:02}.opus", i + 1));
-            if !encode(&path, 1.0) {
+            if !encode(&path, seconds) {
                 return None;
             }
             tracks.push(QueuedTrack {
@@ -70,7 +75,7 @@ impl Fixture {
                 title: format!("Track {}", i + 1),
                 disc_no: 1,
                 track_no: i as i64 + 1,
-                duration_ms: 1000,
+                duration_ms: (seconds * 1000.0) as i64,
             });
         }
         Some(QueuedAlbum {
@@ -374,5 +379,47 @@ fn repeat_album_keeps_going_round() {
     assert!(
         !seen.iter().any(|e| matches!(e, PlayerEvent::QueueFinished)),
         "never reported the queue as finished"
+    );
+}
+
+#[test]
+fn shuffling_after_play_starts_keeps_sound_and_status_in_step() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg not available");
+        return;
+    }
+    let fixture = Fixture::new("shufflestart");
+    // Long enough that `about-to-finish` has not yet moved the cursor off the
+    // first track, which is what makes the queue count as untouched.
+    let albums: Option<Vec<_>> = (1..=8).map(|id| fixture.album_of(id, 1, 10.0)).collect();
+    let Some(albums) = albums else {
+        eprintln!("skipping: could not encode fixtures");
+        return;
+    };
+
+    let Ok((player, events)) = Player::with_sink(REALTIME_SINK) else {
+        eprintln!("skipping: GStreamer unavailable");
+        return;
+    };
+    let mut albums = albums.into_iter();
+    player.play_album(albums.next().unwrap()).unwrap();
+    for album in albums {
+        player.enqueue(album).unwrap();
+    }
+    collect_until(&events, Duration::from_secs(10), |e| {
+        !started_tracks(e).is_empty()
+    });
+
+    // Still on the first track of the first album, so this reshuffles the lot
+    // and will usually move a different album to the front.
+    player.set_shuffle(true).unwrap();
+    let seen = collect_until(&events, Duration::from_millis(600), |_| false);
+
+    let status = player.status().track.map(|(id, _)| id);
+    let heard = started_tracks(&seen).last().copied().unwrap_or(100);
+    assert_eq!(
+        status,
+        Some(heard),
+        "status reports the track that is actually playing"
     );
 }

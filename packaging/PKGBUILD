@@ -9,7 +9,7 @@ license=('MIT OR Apache-2.0')
 
 # webkit2gtk-4.1 renders the interface; the gst-plugins provide the decoders.
 # gst-libav covers AAC and the odder formats a real library accumulates.
-depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gstreamer')
+depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gstreamer' 'dbus')
 makedepends=('rust' 'cargo' 'nodejs' 'npm' 'pkgconf')
 source=("git+https://github.com/jodosh/albumplayer.git#tag=v$pkgver")
 sha256sums=('SKIP')
@@ -33,10 +33,13 @@ package() {
   install -Dm644 "packaging/albumplayer-desktop.desktop" \
     "$pkgdir/usr/share/applications/albumplayer-desktop.desktop"
 
-  for size in 32 128 256 512; do
+  for size in 32 128 256; do
     install -Dm644 "crates/desktop/icons/${size}x${size}.png" \
       "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/albumplayer-desktop.png"
   done
+  # The 512px icon is icon.png, the name the macOS bundle expects.
+  install -Dm644 "crates/desktop/icons/icon.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/albumplayer-desktop.png"
   install -Dm644 "crates/desktop/icons/icon.svg" \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/albumplayer-desktop.svg"
 
