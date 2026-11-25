@@ -9,7 +9,7 @@ license=('MIT OR Apache-2.0')
 
 # webkit2gtk-4.1 renders the interface; the gst-plugins provide the decoders.
 # gst-libav covers AAC and the odder formats a real library accumulates.
-depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gstreamer')
+depends=('webkit2gtk-4.1' 'gtk3' 'gst-plugins-base' 'gst-plugins-good' 'gst-libav' 'gstreamer' 'dbus')
 makedepends=('rust' 'cargo' 'nodejs' 'npm' 'pkgconf')
 source=("git+https://github.com/jodosh/albumplayer.git#tag=v$pkgver")
 sha256sums=('SKIP')
